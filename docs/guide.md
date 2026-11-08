@@ -238,7 +238,7 @@ A name given to the tab wins over all of that, the PR number still in front: the
 
 The PR number and the ticket's title are asked of GitHub and Linear in the background, so a tab never waits on the network: it shows what is known and takes the rest a moment later. A PR found, or a ticket's title, is kept a day, across a restart too (in `~/.cache/switchboard/tab-names.json`); a branch with no PR is asked about again a minute later, and a lookup that fails keeps what was shown and tries again in a minute. Settings' "PRs and tickets in tab names" (`tab_lookups`) turns both lookups off, and turning GitHub or Linear off under Integrations turns off its own.
 
-Each project's tabs wear a color of their own, worked out from the directory: the worktree, or the directory and its branch. Claude Code's statusline, as `switchboard setup` sets it up, draws the same color, so a session and its tab match. The session's badge and the lines around the focused pane take the current tab's color. Settings' "Project colors" (`accent_colors`) turns them off, and every tab is gray.
+Each project's tabs wear a color of their own, worked out from the directory: the worktree, or the directory and its branch. It is never a red, which means an error here (a failing build, a failed stage). Claude Code's statusline, as `switchboard setup` sets it up, draws the same color, so a session and its tab match. The session's badge and the lines around the focused pane take the current tab's color. Settings' "Project colors" (`accent_colors`) turns them off, and every tab is gray.
 
 ### The ⌘ Commands button and the health light
 
