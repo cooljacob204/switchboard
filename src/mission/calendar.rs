@@ -17,8 +17,9 @@
 //!
 //! With UX 2.0 on (`timeline`), the day is drawn as the board draws it:
 //! three rows an hour, dashed rules, each event a block with a bar in its
-//! color, past ones struck through, and on a wide screen the chosen event
-//! beside the day.
+//! color, past ones struck through, the next one saying how soon it starts,
+//! and on a wide screen the chosen event beside the day, with its menu's
+//! join and answers as buttons, who is going and its agenda.
 
 use jiff::Timestamp;
 use jiff::tz::TimeZone;
@@ -651,6 +652,12 @@ fn timeline(
         }
     }
 
+    // The next event to start, which says how soon.
+    let next = timed
+        .iter()
+        .filter(|t| t.2 > now_min)
+        .min_by(|a, b| a.2.total_cmp(&b.2))
+        .map(|t| (t.0, t.2 - now_min));
     let top_row = look.top_row + lines.len();
     for b in &placed {
         let e = &b.event;
@@ -681,6 +688,9 @@ fn timeline(
         let mut detail = range.clone();
         if let Some(j) = &e.join {
             detail.push_str(&format!(" · {}", place(j)));
+        }
+        if let Some((_, soon)) = next.filter(|n| n.0 == b.item) {
+            detail.push_str(&format!(" · in {}", countdown(soon)));
         }
         let height = b.bottom.min(count) - b.top;
         let title_style = if over {
@@ -743,24 +753,42 @@ fn timeline(
             .cursor
             .and_then(|c| events.iter().find(|(i, _)| *i == c))
             .map(|(_, e)| e);
-        for (r, (words, style)) in event_detail(chosen, look).into_iter().enumerate() {
+        for (r, runs) in event_detail(chosen, look).into_iter().enumerate() {
             if r < count {
-                let words = text::cut(&words, cols.saturating_sub(x0 + 1));
-                grid[r].put(x0, &words, style, cols);
+                let mut x = x0;
+                for (words, style) in runs {
+                    let words = text::cut(&words, cols.saturating_sub(x + 1));
+                    grid[r].put(x, &words, style, cols);
+                    x += width(&words);
+                }
             }
         }
     }
     lines.extend(grid.into_iter().map(Row::line));
 }
 
-/// The chosen event, beside the day: its title, its time and where to join,
-/// your reply, where to join it, and the tickets and PRs it names.
-fn event_detail(chosen: Option<&CalEvent>, look: &Look) -> Vec<(String, Style)> {
+/// How long until something starts, from minutes: "15m", "1h", "2h 5m".
+fn countdown(minutes: f64) -> String {
+    let m = minutes.ceil().max(1.0) as i64;
+    match (m / 60, m % 60) {
+        (0, m) => format!("{m}m"),
+        (h, 0) => format!("{h}h"),
+        (h, m) => format!("{h}h {m}m"),
+    }
+}
+
+/// The chosen event, beside the day, a line a list of runs: its title, its
+/// time and where to join, the answers its menu offers as buttons, your
+/// reply, who is going, the start of its description, where to join it,
+/// and the tickets and PRs it names.
+fn event_detail(chosen: Option<&CalEvent>, look: &Look) -> Vec<Vec<(String, Style)>> {
     let (tz, theme) = (look.tz, look.theme);
     let dim = Style::new().fg(theme.dim);
     let heading = dim.add_modifier(Modifier::BOLD);
+    let one = |words: String, style: Style| vec![(words, style)];
+    let gap = || vec![(String::new(), dim)];
     let Some(e) = chosen else {
-        return vec![(String::new(), dim), ("j/k to choose an event".into(), dim)];
+        return vec![gap(), one("j/k to choose an event".into(), dim)];
     };
     let mut when = if e.all_day {
         "all day".to_string()
@@ -774,33 +802,106 @@ fn event_detail(chosen: Option<&CalEvent>, look: &Look) -> Vec<(String, Style)> 
         when.push_str(&format!(" · {}", place(j)));
     }
     let mut out = vec![
-        (String::new(), dim),
-        (
+        gap(),
+        one(
             e.title.clone(),
             Style::new().fg(theme.bright).add_modifier(Modifier::BOLD),
         ),
-        (when, dim),
-        (String::new(), dim),
-        ("YOUR REPLY".into(), heading),
-        (
+        one(when, dim),
+    ];
+    let buttons = buttons(e, theme);
+    if !buttons.is_empty() {
+        out.extend([gap(), buttons]);
+    }
+    out.extend([
+        gap(),
+        one("YOUR REPLY".into(), heading),
+        one(
             reply(e).into(),
             if e.going() { fg(GOING_BAR) } else { fg(STALE) },
         ),
-    ];
+    ]);
+    let going: Vec<&str> = e
+        .attendees
+        .iter()
+        .filter(|a| a.reply == "going")
+        .map(|a| a.name.split_whitespace().next().unwrap_or(&a.name))
+        .collect();
+    if !going.is_empty() {
+        const SHOWN: usize = 4;
+        let chip = Style::new().bg(theme.panel).fg(theme.text);
+        let mut names = Vec::new();
+        for name in going.iter().take(SHOWN) {
+            names.push((format!(" {name} "), chip));
+            names.push((" ".into(), Style::new()));
+        }
+        if going.len() > SHOWN {
+            names.push((format!("+{}", going.len() - SHOWN), dim));
+        }
+        out.extend([gap(), one("GOING".into(), heading), names]);
+    }
+    if !e.description.is_empty() {
+        out.extend([gap(), one("AGENDA".into(), heading)]);
+        out.extend(
+            e.description
+                .lines()
+                .filter(|l| !l.trim().is_empty())
+                .take(2)
+                .map(|l| one(l.trim().to_string(), Style::new().fg(theme.text))),
+        );
+    }
     if let Some(j) = &e.join {
         out.extend([
-            (String::new(), dim),
-            ("JOIN".into(), heading),
-            (j.clone(), Style::new().fg(theme.text)),
+            gap(),
+            one("JOIN".into(), heading),
+            one(j.clone(), Style::new().fg(theme.text)),
         ]);
     }
     if !e.refs.is_empty() {
-        out.extend([(String::new(), dim), ("FROM YOUR WORK".into(), heading)]);
+        out.extend([gap(), one("FROM YOUR WORK".into(), heading)]);
         out.extend(
             e.refs
                 .iter()
-                .map(|r| (format!("● {}", r.id), Style::new().fg(theme.text))),
+                .map(|r| one(format!("● {}", r.id), Style::new().fg(theme.text))),
         );
+    }
+    out
+}
+
+/// Joining and answering as buttons, a run of color each labelled with the
+/// key that takes it in the event's menu, only those the menu offers, and
+/// then that they are in Enter's menu, since the view has no keys of its
+/// own for them.
+fn buttons(e: &CalEvent, theme: &Theme) -> Vec<(String, Style)> {
+    let mut out = Vec::new();
+    if e.join.is_some() {
+        out.push((
+            " j Join ".to_string(),
+            Style::new()
+                .bg(Color::Indexed(ACCENT))
+                .fg(Color::Indexed(16))
+                .add_modifier(Modifier::BOLD),
+        ));
+    }
+    let offered = calendar::rsvp_choices(e);
+    for (answer, label) in [
+        (calendar::Rsvp::Yes, "Going"),
+        (calendar::Rsvp::No, "Not going"),
+        (calendar::Rsvp::Maybe, "Maybe"),
+    ] {
+        if offered.contains(&answer) {
+            let (key, _) = answer.choice();
+            if !out.is_empty() {
+                out.push((" ".into(), Style::new()));
+            }
+            out.push((
+                format!(" {key} {label} "),
+                Style::new().bg(theme.panel).fg(theme.text),
+            ));
+        }
+    }
+    if !out.is_empty() {
+        out.push(("  in Enter menu".into(), Style::new().fg(theme.dim)));
     }
     out
 }
@@ -1012,7 +1113,17 @@ mod tests {
         let review = Item::new("Design review", "Design review").data(json!({
             "title": "Design review", "start": at(15, 0), "end": at(16, 0),
             "you": "not answered", "join": "https://meet.google.com/abc-defg-hij",
-            "refs": [{ "id": "AB-12" }],
+            "refs": [{ "id": "AB-12" }], "id": "g1",
+            "attendees": [
+                { "name": "Ana Ruiz", "reply": "going" },
+                { "name": "Ben", "reply": "going" },
+                { "name": "Priya", "reply": "going" },
+                { "name": "Sam", "reply": "going" },
+                { "name": "Lee", "reply": "going" },
+                { "name": "Kim", "reply": "going" },
+                { "name": "Max", "reply": "not answered" },
+            ],
+            "description": "Walk through options A and B.\n\nPick one.\nThird line",
         }));
         let v = view(vec![
             event("Standup", (9, 0), (9, 15), "going"),
@@ -1055,7 +1166,7 @@ mod tests {
         );
         // The pairing, an hour: three rows, its title bold, then its time.
         assert!(text[16].starts_with("        ▌ Pairing"), "{text:?}");
-        assert!(text[17].contains("1:30 – 2:30 PM"), "{text:?}");
+        assert!(text[17].contains("1:30 – 2:30 PM · in 15m"), "{text:?}");
         let bar = lines[16].spans.iter().find(|s| s.content == "▌").unwrap();
         assert_eq!(bar.style.fg, Some(Color::Indexed(GOING_BAR)));
         // The chosen review, beside the day: title, time and where to join,
@@ -1065,9 +1176,25 @@ mod tests {
         let right: Vec<String> = text.iter().map(|l| l.chars().skip(57).collect()).collect();
         assert_eq!(right[3].trim(), "│ Design review");
         assert_eq!(right[4].trim(), "│ 3 – 4 PM · Google Meet");
-        assert_eq!(right[7].trim(), "│ not replied");
-        assert_eq!(right[10].trim(), "│ https://meet.google.com/abc-defg-hij");
-        assert_eq!(right[13].trim(), "│ ● AB-12");
+        // The menu's join and answers as buttons, labelled with its keys.
+        assert_eq!(
+            right[6].trim(),
+            "│  j Join   y Going   n Not going   m Maybe   in Enter menu"
+        );
+        let join = lines[6]
+            .spans
+            .iter()
+            .find(|s| s.content.contains("j Join"))
+            .unwrap();
+        assert_eq!(join.style.bg, Some(Color::Indexed(ACCENT)));
+        assert_eq!(right[9].trim(), "│ not replied");
+        // Four of the six going, by first name, and how many more.
+        assert_eq!(right[12].trim(), "│  Ana   Ben   Priya   Sam  +2");
+        assert_eq!(right[14].trim(), "│ AGENDA");
+        assert_eq!(right[15].trim(), "│ Walk through options A and B.");
+        assert_eq!(right[16].trim(), "│ Pick one.");
+        assert_eq!(right[19].trim(), "│ https://meet.google.com/abc-defg-hij");
+        assert_eq!(right[22].trim(), "│ ● AB-12");
         assert!(hits.iter().any(|h| h.y == 21 && h.spot == Spot::Index(2)));
         for l in &lines {
             assert_eq!(width(&l.text()), 120, "{:?}", l.text());
