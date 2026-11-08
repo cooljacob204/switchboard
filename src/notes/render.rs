@@ -825,6 +825,81 @@ pub fn looks<S: AsRef<str>>(lines: &[S], kinds: &[Kind], d: &Drawing<'_>) -> Vec
     out
 }
 
+// ── UX 2.0's chips ──────────────────────────────────────────────────────────
+
+/// What a chip under an unticked checklist item says, with UX 2.0 on: the
+/// item has a plan (an indented `Plan: [[...]]` line under it), or it waits
+/// on a choice ("needs a choice" in the item or that line). Read from the
+/// note's text alone, so drawing starts nothing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Chip {
+    Choice,
+    Plan,
+}
+
+impl Chip {
+    pub fn text(self) -> &'static str {
+        match self {
+            Chip::Choice => "needs a choice",
+            Chip::Plan => "plan",
+        }
+    }
+
+    /// A run of background color: the choice yellow, the plan dim.
+    pub fn style(self, light: bool) -> Style {
+        match self {
+            Chip::Choice => Style::new().fg(Color::Indexed(3)).bg(if light {
+                Color::Rgb(0xf5, 0xe9, 0xb8)
+            } else {
+                Color::Rgb(0x3a, 0x32, 0x20)
+            }),
+            Chip::Plan => Style::new()
+                .fg(Color::Indexed(if light { 242 } else { 245 }))
+                .bg(Color::Indexed(if light { 253 } else { 237 })),
+        }
+    }
+}
+
+/// Each line's chips: an unticked item's, from it and the lines indented
+/// under it up to the next item; none for any other line.
+pub fn chips<S: AsRef<str>>(lines: &[S], kinds: &[Kind]) -> Vec<Vec<Chip>> {
+    let mut out = vec![Vec::new(); lines.len()];
+    for (i, k) in kinds.iter().enumerate() {
+        let Kind::Check {
+            indent,
+            done: false,
+            ..
+        } = *k
+        else {
+            continue;
+        };
+        let mut plan = false;
+        let mut choice = lines[i].as_ref().to_lowercase().contains("needs a choice");
+        for (line, k) in lines.iter().zip(kinds).skip(i + 1) {
+            let line = line.as_ref();
+            if line.bytes().all(is_space)
+                || indent_of(line) <= indent
+                || matches!(k, Kind::Check { .. })
+            {
+                break;
+            }
+            let text = line.trim_start();
+            let text = text.strip_prefix("- ").unwrap_or(text);
+            if text.starts_with("Plan:") && text.contains("[[") {
+                plan = true;
+                choice |= text.to_lowercase().contains("needs a choice");
+            }
+        }
+        if choice {
+            out[i].push(Chip::Choice);
+        }
+        if plan {
+            out[i].push(Chip::Plan);
+        }
+    }
+    out
+}
+
 /// Pushes a conceal for table.rs.
 pub fn conceal_with(
     look: &mut Look,
@@ -1127,6 +1202,33 @@ mod tests {
         let h = cells.iter().find(|c| c.text == "h").unwrap();
         assert_eq!(h.col, Some(6));
         assert!(h.style.add_modifier.contains(Modifier::BOLD));
+    }
+
+    #[test]
+    fn an_unticked_items_plan_and_choice_are_its_chips() {
+        let lines = [
+            "# Work",
+            "- [ ] stable IDs",
+            "  Plan: [[Stable IDs]]",
+            "- [ ] a condensed sidebar",
+            "  Plan: [[Condensed sidebar]], needs a choice: A or B",
+            "- [ ] needs a choice between two looks",
+            "- [ ] no plan yet",
+            "  some words",
+            "- [x] landed",
+            "  Plan: [[Landed]]",
+            "Plan: [[Not under an item]]",
+        ];
+        let ks = kinds(&lines);
+        let got = chips(&lines, &ks);
+        assert_eq!(got[1], [Chip::Plan]);
+        assert_eq!(got[3], [Chip::Choice, Chip::Plan]);
+        assert_eq!(got[5], [Chip::Choice]);
+        assert!(got[6].is_empty(), "no Plan: line, no chip");
+        assert!(got[8].is_empty(), "a ticked item gets nothing new");
+        assert!(got[10].is_empty(), "a plan under no item");
+        assert_eq!(Chip::Plan.text(), "plan");
+        assert_eq!(Chip::Choice.style(false).fg, Some(Color::Indexed(3)));
     }
 
     fn looks_of(lines: &[&str]) -> Vec<Look> {

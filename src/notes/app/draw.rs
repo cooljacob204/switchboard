@@ -214,6 +214,15 @@ impl App {
                 bg,
             })
             .collect();
+        if let Some(chips) = ctx.chips.get(row).filter(|c| !c.is_empty())
+            && let render::Kind::Check { indent, .. } = ctx.kinds[row]
+        {
+            out.push(Shown::Chips {
+                row,
+                chips: chips.clone(),
+                indent: width(&line[..indent]) as u16 + 2,
+            });
+        }
         if line.contains("![")
             && let Some(note) = self.current_path().map(|p| p.to_path_buf())
         {
@@ -320,6 +329,11 @@ impl App {
                 selected.insert(r, (s, e.max(s)));
             }
         }
+        let chips = if self.opts.ux2 {
+            render::chips(&lines, &kinds)
+        } else {
+            Vec::new()
+        };
         let mut ctx = Ctx {
             raw: self.focus == Focus::Note
                 && matches!(self.editor.mode, Mode::Insert | Mode::Visual { .. }),
@@ -329,6 +343,7 @@ impl App {
             lines,
             kinds,
             looks,
+            chips,
             folded,
             selected,
         };
@@ -462,6 +477,18 @@ impl App {
                         cursor = Some((text.x, y));
                     }
                 }
+                Shown::Chips { chips, indent, .. } => {
+                    let mut x = text.x + indent;
+                    for chip in chips {
+                        let shown = format!(" {} ", chip.text());
+                        let w = width(&shown) as u16;
+                        if x + w > text.right() {
+                            break;
+                        }
+                        buf.set_string(x, y, &shown, chip.style(self.opts.light));
+                        x += w + 1;
+                    }
+                }
                 Shown::Picture { pic, r, .. } => {
                     let x0 = text.x + pic.indent;
                     let style = Style::new().fg(pic.color());
@@ -550,7 +577,9 @@ impl App {
                     .unwrap_or(0);
                 Some((*row, Some(end)))
             }
-            Shown::Fold { row, .. } | Shown::Picture { row, .. } => Some((*row, None)),
+            Shown::Chips { row, .. } | Shown::Fold { row, .. } | Shown::Picture { row, .. } => {
+                Some((*row, None))
+            }
         }
     }
 
@@ -621,6 +650,8 @@ struct Ctx {
     lines: Vec<String>,
     kinds: Vec<render::Kind>,
     looks: Vec<render::Look>,
+    /// Each line's UX 2.0 chips, empty with it off.
+    chips: Vec<Vec<render::Chip>>,
     folded: std::collections::HashMap<usize, Option<usize>>,
     selected: std::collections::HashMap<usize, (usize, usize)>,
 }
