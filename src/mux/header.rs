@@ -20,6 +20,7 @@ use ratatui::style::{Color, Modifier, Style};
 
 use crate::agent::State;
 use crate::mux::compose;
+use crate::mux::keys::Action;
 use crate::status::theme::Palette;
 
 /// The rows the header takes: the name, a blank row, the keys, the rule.
@@ -51,6 +52,17 @@ impl Shown {
             Shown::Pr => "M-v",
             Shown::Ticket => "M-i",
             Shown::Note => "M-e",
+        }
+    }
+
+    /// What its key is bound to, which a click on it does too.
+    pub fn action(self) -> Action {
+        match self {
+            Shown::Claude => Action::FocusClaude,
+            Shown::Diff => Action::Diff(crate::diff::Command::Diff),
+            Shown::Pr => Action::View(crate::views::Command::PrView),
+            Shown::Ticket => Action::View(crate::views::Command::TicketView),
+            Shown::Note => Action::Notes(crate::notes::serve::Command::Beside),
         }
     }
 
@@ -94,11 +106,16 @@ pub struct Header {
     pub name: String,
     /// Where the tab works, as it is shown (`~/code/app`).
     pub path: String,
+    /// The branch it is on, as tab naming last worked it out; empty when
+    /// not known.
+    pub branch: String,
     pub state: Option<State>,
     /// How long it has been in that state (`4m`), empty when not known.
     pub age: String,
     pub color: Option<Color>,
     pub shown: Shown,
+    /// The tab M-a goes to next, its number and name.
+    pub next: Option<(usize, String)>,
 }
 
 /// A state's mark and color, as the sidebar's badges have them.
@@ -116,7 +133,8 @@ pub type Keys = Vec<(Rect, Shown)>;
 
 /// Draws the header into `area` (its full width, `ROWS` high), and gives
 /// where each key went.
-pub fn draw(buf: &mut Buffer, area: Rect, h: &Header, p: &Palette) -> Keys {
+/// The key under the mouse, with hover_highlight on, is lit.
+pub fn draw(buf: &mut Buffer, area: Rect, h: &Header, hover: Option<Shown>, p: &Palette) -> Keys {
     let mut keys = Keys::new();
     if area.height == 0 || area.width == 0 {
         return keys;
@@ -136,6 +154,9 @@ pub fn draw(buf: &mut Buffer, area: Rect, h: &Header, p: &Palette) -> Keys {
             .add_modifier(Modifier::BOLD),
     );
     let mut facts = vec![h.path.clone()];
+    if !h.branch.is_empty() {
+        facts.push(h.branch.clone());
+    }
     if let Some(s) = h.state {
         // "waiting 4m": how long a tab has waited is what tells you where
         // M-a should take you first.
@@ -145,7 +166,15 @@ pub fn draw(buf: &mut Buffer, area: Rect, h: &Header, p: &Palette) -> Keys {
             format!("{} {}", s.name(), h.age)
         });
     }
-    compose::put(buf, x + 3, first, &facts.join(" · "), band.fg(p.dim));
+    let end = compose::put(buf, x + 3, first, &facts.join(" · "), band.fg(p.dim));
+    if let Some((number, name)) = &h.next {
+        let next = format!("M-a next: {number} {name} ");
+        let width = crate::sidebar::text::width(&next) as u16;
+        let at = area.right().saturating_sub(width);
+        if at > end + 1 {
+            compose::put(buf, at, first, &next, band.fg(p.dim));
+        }
+    }
     if area.height < 3 {
         return keys;
     }
@@ -168,6 +197,11 @@ pub fn draw(buf: &mut Buffer, area: Rect, h: &Header, p: &Palette) -> Keys {
                 .add_modifier(Modifier::BOLD)
         } else {
             Style::new().fg(p.dim)
+        };
+        let key_style = if hover == Some(shown) {
+            key_style.add_modifier(Modifier::REVERSED)
+        } else {
+            key_style
         };
         let start = x;
         x = compose::put(buf, x, row, &format!(" {} ", shown.key()), key_style);
@@ -206,10 +240,12 @@ mod tests {
         Header {
             name: "planning".into(),
             path: "~/switchboard".into(),
+            branch: String::new(),
             state: Some(State::Working),
             age: "2m".into(),
             color: None,
             shown,
+            next: None,
         }
     }
 
@@ -217,7 +253,7 @@ mod tests {
     fn names_the_tab_and_lists_the_keys() {
         let area = Rect::new(0, 0, 90, ROWS);
         let mut buf = Buffer::empty(area);
-        let keys = draw(&mut buf, area, &header(Shown::Claude), &Palette::DARK);
+        let keys = draw(&mut buf, area, &header(Shown::Claude), None, &Palette::DARK);
         assert_eq!(text(&buf, 0), " ⠹ planning   ~/switchboard · working 2m");
         assert_eq!(text(&buf, 1), "");
         assert_eq!(
@@ -230,10 +266,49 @@ mod tests {
     }
 
     #[test]
+    fn says_the_branch_and_where_m_a_goes_next() {
+        let area = Rect::new(0, 0, 90, ROWS);
+        let mut buf = Buffer::empty(area);
+        let h = Header {
+            branch: "main".into(),
+            next: Some((3, "billing".into())),
+            ..header(Shown::Claude)
+        };
+        draw(&mut buf, area, &h, None, &Palette::DARK);
+        let first = text(&buf, 0);
+        assert!(first.starts_with(" ⠹ planning   ~/switchboard · main · working 2m"));
+        assert!(first.ends_with("M-a next: 3 billing"));
+        let at = 90 - "M-a next: 3 billing ".len() as u16;
+        assert_eq!(buf[(at, 0)].fg, Palette::DARK.dim);
+    }
+
+    #[test]
+    fn lights_the_key_under_the_mouse_and_clicks_do_what_it_does() {
+        let area = Rect::new(0, 0, 90, ROWS);
+        let mut buf = Buffer::empty(area);
+        let keys = draw(
+            &mut buf,
+            area,
+            &header(Shown::Claude),
+            Some(Shown::Diff),
+            &Palette::DARK,
+        );
+        let (diff, _) = keys.iter().find(|(_, s)| *s == Shown::Diff).unwrap();
+        assert!(buf[(diff.x, diff.y)].modifier.contains(Modifier::REVERSED));
+        let (pr, _) = keys.iter().find(|(_, s)| *s == Shown::Pr).unwrap();
+        assert!(!buf[(pr.x, pr.y)].modifier.contains(Modifier::REVERSED));
+        assert_eq!(Shown::Claude.action(), Action::FocusClaude);
+        assert_eq!(
+            Shown::Note.action(),
+            Action::Notes(crate::notes::serve::Command::Beside)
+        );
+    }
+
+    #[test]
     fn highlights_what_the_tab_shows() {
         let area = Rect::new(0, 0, 90, ROWS);
         let mut buf = Buffer::empty(area);
-        let keys = draw(&mut buf, area, &header(Shown::Pr), &Palette::DARK);
+        let keys = draw(&mut buf, area, &header(Shown::Pr), None, &Palette::DARK);
         let (pr, _) = keys.iter().find(|(_, s)| *s == Shown::Pr).unwrap();
         assert_eq!(buf[(pr.x, pr.y)].bg, compose::colors::ACCENT);
         let (claude, _) = keys.iter().find(|(_, s)| *s == Shown::Claude).unwrap();

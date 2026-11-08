@@ -1607,20 +1607,11 @@ impl Server {
 
     // ── M-a ─────────────────────────────────────────────────────────────────
 
-    /// M-a: the next of what needs you, in the sidebar's order, across every
-    /// session: the tabs under Needs you, then the notifications while there
-    /// are any (needs_notices setting). Pressed from the sidebar, the cursor
-    /// stays in a sidebar, on the tab it went to.
-    pub fn sidebar_next_needs_you(&mut self, client: ClientId) {
-        let Some(session) = self.clients.get(&client).map(|c| c.session.clone()) else {
-            return;
-        };
-        let Some(here) = self.session(&session).map(|s| s.current) else {
-            return;
-        };
+    /// What M-a walks, in its order: the tabs under Needs you, then the
+    /// notifications while there are any (needs_notices setting).
+    fn sidebar_needs_stops(&self, all: &[TabModel]) -> Vec<Stop> {
         let r = Rules::now();
-        let all = self.sidebar_all_tabs();
-        let mut stops: Vec<Stop> = model::needs_you(&all, &r)
+        let mut stops: Vec<Stop> = model::needs_you(all, &r)
             .iter()
             .map(|t| Stop {
                 place: Place::Tab(t.id),
@@ -1635,13 +1626,45 @@ impl Server {
                 },
             })
             .collect();
-        let notices = self.sidebar_notices();
-        if settings::is_on("needs_notices") && !notices.is_empty() {
+        if settings::is_on("needs_notices") && !self.sidebar_notices().is_empty() {
             stops.push(Stop {
                 place: Place::Notices,
                 why: Why::Notices,
             });
         }
+        stops
+    }
+
+    /// The tab M-a would go to next from `here`, its number and name, from
+    /// the same walk without taking it (UX 2.0's header says it): none when
+    /// it would go to the notifications, or nowhere else.
+    pub fn sidebar_needs_next(&self, here: TabId) -> Option<(usize, String)> {
+        let all = self.sidebar_all_tabs();
+        let stops = self.sidebar_needs_stops(&all);
+        let Next::Go(i) = self.sidebar.walk.clone().next(&stops, here) else {
+            return None;
+        };
+        let Place::Tab(t) = stops[i].place else {
+            return None;
+        };
+        all.iter()
+            .find(|m| m.id == t && t != here)
+            .map(|m| (m.index, m.name.clone()))
+    }
+
+    /// M-a: the next of what needs you, in the sidebar's order, across every
+    /// session: the tabs under Needs you, then the notifications while there
+    /// are any (needs_notices setting). Pressed from the sidebar, the cursor
+    /// stays in a sidebar, on the tab it went to.
+    pub fn sidebar_next_needs_you(&mut self, client: ClientId) {
+        let Some(session) = self.clients.get(&client).map(|c| c.session.clone()) else {
+            return;
+        };
+        let Some(here) = self.session(&session).map(|s| s.current) else {
+            return;
+        };
+        let all = self.sidebar_all_tabs();
+        let stops = self.sidebar_needs_stops(&all);
         let side = self.sidebar.sides.get(&session).filter(|s| s.focused);
         let from_sidebar = side.is_some();
         let on_notices = side

@@ -291,6 +291,10 @@ pub struct Client {
     last_click: Option<(Instant, u16, u16, u8)>,
     /// Where the status line's button and tabs were drawn, for clicks.
     status_hits: crate::status::Hits,
+    /// Where UX 2.0's header drew its keys, for clicks, and the one under
+    /// the mouse (src/mux/header.rs).
+    pub header_keys: super::header::Keys,
+    pub header_hover: Option<super::header::Shown>,
     /// What is shown over the tab, the top one taking the input (src/ui).
     pub overlays: crate::ui::Stack,
     pub activity: Instant,
@@ -1812,6 +1816,8 @@ impl Server {
             drag: None,
             last_click: None,
             status_hits: Default::default(),
+            header_keys: Default::default(),
+            header_hover: None,
             overlays: Default::default(),
             activity: Instant::now(),
             options_taken: 0,
@@ -1884,6 +1890,8 @@ impl Server {
             drag: None,
             last_click: None,
             status_hits: Default::default(),
+            header_keys: Default::default(),
+            header_hover: None,
             overlays: Default::default(),
             activity: Instant::now()
                 .checked_sub(idle)
@@ -2585,6 +2593,31 @@ impl Server {
             return;
         };
         let status_row = c.rows.saturating_sub(crate::status::lines());
+        // UX 2.0's header: a click on a key does what the key does, and
+        // the one under the mouse is lit (hover_highlight).
+        let header_hit = c
+            .header_keys
+            .iter()
+            .find(|(r, _)| m.row == r.y && m.col >= r.x && m.col < r.right())
+            .map(|(_, shown)| *shown);
+        if m.kind == MouseKind::Move {
+            let lit = header_hit.filter(|_| crate::settings::is_on("hover_highlight"));
+            if c.header_hover != lit
+                && let Some(c) = self.clients.get_mut(&id)
+            {
+                c.header_hover = lit;
+                c.dirty = true;
+            }
+        }
+        if let Some(shown) = header_hit {
+            if m.kind == MouseKind::Press && m.button == MouseButton::Left {
+                self.act(id, shown.action());
+            }
+            return;
+        }
+        let Some(c) = self.clients.get(&id) else {
+            return;
+        };
         // The wheel over the status line goes to the tab before or after,
         // as tmux's WheelUpStatus and WheelDownStatus did.
         if m.row >= status_row
@@ -2878,13 +2911,14 @@ impl Server {
         };
         let mut frame = Frame::new(c.cols.max(1), c.rows.max(1));
         let session = c.session.clone();
-        let (hits, side) = match self.session(&c.session) {
+        let (hits, side, header_keys) = match self.session(&c.session) {
             Some(s) => self.compose(&mut frame, s, c),
-            None => (Default::default(), None),
+            None => Default::default(),
         };
         let c = self.clients.get_mut(&id).expect("checked above");
         frame.cover_links(|frame| c.overlays.draw(frame));
         c.status_hits = hits;
+        c.header_keys = header_keys;
         c.dirty = false;
         let bytes = c.screen.render(&frame);
         let _ = c.tx.send(ServerMsg::Output(bytes));
@@ -2897,7 +2931,11 @@ impl Server {
         frame: &mut Frame,
         s: &Session,
         c: &Client,
-    ) -> (crate::status::Hits, Option<crate::sidebar::Drawn>) {
+    ) -> (
+        crate::status::Hits,
+        Option<crate::sidebar::Drawn>,
+        super::header::Keys,
+    ) {
         let rows = frame.area().height;
         let cols = frame.area().width;
         let palette = crate::status::theme::palette();
@@ -3001,9 +3039,11 @@ impl Server {
                 let main = s.main_area();
                 Rect::new(main.x, 0, main.width, top).intersection(frame.area())
             });
+        let mut header_keys = super::header::Keys::new();
         if let Some(area) = header_at {
             let header = self.tab_header(s.current);
-            super::header::draw(&mut frame.buf, area, &header, palette);
+            header_keys =
+                super::header::draw(&mut frame.buf, area, &header, c.header_hover, palette);
         }
         let side = self.sidebar_draw(&mut frame.buf, s, c.id);
         let hits = self.draw_status_rows(frame, s);
@@ -3025,7 +3065,7 @@ impl Server {
             );
         }
         frame.cursor = cursor;
-        (hits, side)
+        (hits, side, header_keys)
     }
 }
 
@@ -3048,16 +3088,19 @@ impl Server {
             .filter_map(|p| self.agents.get(p))
             .find(|a| a.state.is_some() && a.state == state)
             .map(|a| a.since);
+        let dir = self.tab_path(tab);
         super::header::Header {
             name: self.tab_label(tab),
-            path: self
-                .tab_path(tab)
-                .map(crate::paths::tilde)
-                .unwrap_or_default(),
+            path: dir.map(crate::paths::tilde).unwrap_or_default(),
+            branch: dir
+                .and_then(|d| self.tab_names.names.branch(d))
+                .unwrap_or_default()
+                .to_string(),
             state,
             age: crate::sidebar::text::ago(since, crate::util::now_secs()),
             color: self.tab_color(tab).map(Into::into),
             shown,
+            next: self.sidebar_needs_next(tab),
         }
     }
 }
