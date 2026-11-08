@@ -260,6 +260,9 @@ fn tab_marks_a_few_of_a_note_s_items_and_each_marked_gets_a_tab() {
     client.send(b"\t");
     client.wait_text("(2 marked)");
     client.send(b"\r");
+    // Where they land: the default branch, first, as Enter takes it.
+    client.wait_text("Land on");
+    client.send(b"\r");
     wait("a tab for each item marked", || {
         tabs(&server).len() == before + 2
     });
