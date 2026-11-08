@@ -5,7 +5,7 @@
 //! its items were last started in. New in the Rust version: the tmux
 //! version's pick-dir.zsh and autopilot's target list had no memory, so the
 //! repository items are queued in sat wherever its tabs put it, and a
-//! branch like `cquinones/dev` had to be found each time.
+//! branch like `team/next` had to be found each time.
 //!
 //! One small file, `work-recent.json` in the state folder, the most recent
 //! first in each list, with the time each was picked: `{"dirs": [{"path",
@@ -207,9 +207,9 @@ mod tests {
         let file = dir.join("work-recent.json");
         let (a, b) = (Path::new("/r/a/.git"), Path::new("/r/b/.git"));
         pick_branch_in(&file, a, "", 1);
-        pick_branch_in(&file, a, "cquinones/dev", 2);
+        pick_branch_in(&file, a, "team/next", 2);
         pick_branch_in(&file, b, "x", 3);
-        assert_eq!(branches_in(&file, a), ["cquinones/dev", ""]);
+        assert_eq!(branches_in(&file, a), ["team/next", ""]);
         assert_eq!(branches_in(&file, b), ["x"]);
         assert!(branches_in(&file, Path::new("/r/c/.git")).is_empty());
         let _ = std::fs::remove_dir_all(&dir);

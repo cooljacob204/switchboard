@@ -591,12 +591,12 @@ mod tests {
 
     #[test]
     fn a_branch_is_one_file_name_and_reads_back() {
-        for branch in ["cquinones/dev", "a%2Fb/c", "plain"] {
+        for branch in ["team/next", "a%2Fb/c", "plain"] {
             let suffix = file_suffix(branch);
             assert!(!suffix.contains('/'));
             assert_eq!(branch_of_suffix(&suffix), branch);
         }
-        assert_eq!(file_suffix("cquinones/dev"), "cquinones%2Fdev");
+        assert_eq!(file_suffix("team/next"), "team%2Fnext");
     }
 
     #[test]

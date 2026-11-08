@@ -167,13 +167,13 @@ fn worktrees_landing_on_different_branches_hold_their_own_locks_at_once() {
     let tmp = TempDir::new("land-targets");
     let home = tmp.path();
     let repo = repo(home);
-    git(&repo, &["branch", "cquinones/dev"]);
+    git(&repo, &["branch", "team/next"]);
     let one = worktree(home, &repo, home, "one");
     let two = worktree(home, &repo, home, "two");
     let three = worktree(home, &repo, home, "three");
     let four = worktree(home, &repo, home, "four");
     // As wtn --target records it; naming the default branch is landing on it.
-    git(&repo, &["config", "branch.two.wtnTarget", "cquinones/dev"]);
+    git(&repo, &["config", "branch.two.wtnTarget", "team/next"]);
     git(&repo, &["config", "branch.four.wtnTarget", "main"]);
 
     assert_eq!(
@@ -184,12 +184,12 @@ fn worktrees_landing_on_different_branches_hold_their_own_locks_at_once() {
     assert_eq!(
         code(&lock(home, &two, &["take"])),
         0,
-        "cquinones/dev's, taken while the default branch's is held"
+        "team/next's, taken while the default branch's is held"
     );
     assert!(repo.join(".git/land.lock/holder").exists());
-    assert!(repo.join(".git/land.lock.cquinones%2Fdev/holder").exists());
+    assert!(repo.join(".git/land.lock.team%2Fnext/holder").exists());
 
-    let behind = lock(home, &three, &["--target", "cquinones/dev", "take"]);
+    let behind = lock(home, &three, &["--target", "team/next", "take"]);
     assert_eq!(
         code(&behind),
         3,
@@ -228,10 +228,10 @@ fn worktrees_landing_on_different_branches_hold_their_own_locks_at_once() {
     assert_eq!(
         stdout(&lock(home, &one, &["holder"])).trim(),
         one.to_str().unwrap(),
-        "letting cquinones/dev's go leaves the default branch's held"
+        "letting team/next's go leaves the default branch's held"
     );
     assert_eq!(
-        code(&lock(home, &three, &["--target", "cquinones/dev", "take"])),
+        code(&lock(home, &three, &["--target", "team/next", "take"])),
         0
     );
 }

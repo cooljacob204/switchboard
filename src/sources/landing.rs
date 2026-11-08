@@ -612,7 +612,7 @@ mod tests {
             worktree
         });
         let common = main.join(".git");
-        // The default branch's lock held by one; cquinones/dev's by two,
+        // The default branch's lock held by one; team/next's by two,
         // three waiting for it. A queue's mutex is no branch.
         fs::create_dir_all(common.join("land.lock")).unwrap();
         fs::write(
@@ -620,18 +620,18 @@ mod tests {
             serde_json::json!({ "path": one, "since": 1 }).to_string(),
         )
         .unwrap();
-        fs::create_dir_all(common.join("land.lock.cquinones%2Fdev")).unwrap();
+        fs::create_dir_all(common.join("land.lock.team%2Fnext")).unwrap();
         fs::write(
-            common.join("land.lock.cquinones%2Fdev/holder"),
+            common.join("land.lock.team%2Fnext/holder"),
             serde_json::json!({ "path": two, "since": 2 }).to_string(),
         )
         .unwrap();
         fs::write(
-            common.join("land.queue.cquinones%2Fdev"),
+            common.join("land.queue.team%2Fnext"),
             serde_json::json!([{ "path": three, "since": 3 }]).to_string(),
         )
         .unwrap();
-        fs::create_dir_all(common.join("land.queue.cquinones%2Fdev.lock")).unwrap();
+        fs::create_dir_all(common.join("land.queue.team%2Fnext.lock")).unwrap();
         let tabs = vec![
             (TabId(1), vec![one.clone()]),
             (TabId(2), vec![two.clone()]),
@@ -639,7 +639,7 @@ mod tests {
         ];
         let read = landing_of(&tabs, &running_sessions(&sessions));
         let targets: Vec<Option<&str>> = read.repos.iter().map(|r| r.target.as_deref()).collect();
-        assert_eq!(targets, vec![None, Some("cquinones/dev")]);
+        assert_eq!(targets, vec![None, Some("team/next")]);
         let line = |id: u32| {
             let p = &read.places[&TabId(id)].landing;
             (p.holding, p.line)
@@ -666,12 +666,12 @@ mod tests {
             vec![
                 "repo · straight to the default branch",
                 "1. first",
-                "repo → cquinones/dev",
+                "repo → team/next",
                 "1. second",
                 "2. third",
             ]
         );
-        assert_eq!(items[4].data["landing"]["target"], "cquinones/dev");
+        assert_eq!(items[4].data["landing"]["target"], "team/next");
         assert_eq!(items[4].data["landing"]["place"], 1);
     }
 

@@ -337,7 +337,7 @@ mod tests {
             skipped: 1,
             spend_limit: 0.0,
             lands_alone: true,
-            target: "cquinones/dev".into(),
+            target: "team/next".into(),
         };
         let items = items(
             &s,
@@ -349,7 +349,7 @@ mod tests {
         assert_eq!(items[0].title, "Work");
         assert_eq!(
             items[0].detail,
-            "→ cquinones/dev · 2 of 2 working · 3 of 5 open · lands without asking · paused by you"
+            "→ team/next · 2 of 2 working · 3 of 5 open · lands without asking · paused by you"
         );
         assert_eq!(items[0].id, HEADING);
         let ids: Vec<&str> = items.iter().map(|i| i.id.as_str()).collect();

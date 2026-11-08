@@ -109,7 +109,7 @@ fn set_up(
     git(&repo, &["init", "-q"]);
     git(&repo, &["symbolic-ref", "HEAD", "refs/heads/main"]);
     git(&repo, &["commit", "-q", "--allow-empty", "-m", "start"]);
-    git(&repo, &["branch", "cquinones/dev"]);
+    git(&repo, &["branch", "team/next"]);
     let repo = repo.canonicalize().unwrap();
 
     // Wide enough for the Autopilot view's stage cells beside the sidebar.
@@ -157,7 +157,7 @@ fn set_up(
             .iter()
             .any(|l| l.contains("main (the default branch)"))
     );
-    assert!(screen.iter().any(|l| l.contains("cquinones/dev")));
+    assert!(screen.iter().any(|l| l.contains("team/next")));
     client.type_text("\r");
     client.wait_text("Tabs working at once");
     client.type_text("\r");
@@ -291,14 +291,14 @@ fn turning_it_on_opens_a_tab_for_the_notes_next_item_then_the_next_and_says_when
     client.wait_text("Change the target branch…");
     client.type_text("jjjj\r");
     client.wait_text("Another branch…");
-    client.type_text("cquinones/dev\r");
+    client.type_text("team/next\r");
     wait("the target kept", &server, || {
         std::fs::read_to_string(server.state.join("autopilot.json"))
             .ok()
             .and_then(|t| serde_json::from_str::<Value>(&t).ok())
-            .is_some_and(|m| m["target"] == "cquinones/dev")
+            .is_some_and(|m| m["target"] == "team/next")
     });
-    client.wait_text("→ cquinones/dev");
+    client.wait_text("→ team/next");
 
     // Renamed outside Notes: followed by its ID, its new path kept.
     std::fs::create_dir_all(notes.path().join("Projects")).unwrap();

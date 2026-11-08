@@ -360,13 +360,13 @@ mod tests {
                 .contains(" · lands on its own")
         );
         let targeted = Summary {
-            target: "cquinones/dev".into(),
+            target: "team/next".into(),
             ..summary()
         };
         assert!(
             line(&targeted, 160, false, false, &Theme::DARK)
                 .text()
-                .starts_with(" AUTO Work  → cquinones/dev · 2 of 3 working")
+                .starts_with(" AUTO Work  → team/next · 2 of 3 working")
         );
         let paused = Summary {
             paused: true,

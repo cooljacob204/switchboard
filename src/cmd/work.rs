@@ -1130,8 +1130,8 @@ mod tests {
     fn an_items_tab_names_its_target_only_when_one_was_chosen() {
         assert_eq!(item_args(12, ""), ["--item", "12"]);
         assert_eq!(
-            item_args(12, "cquinones/dev"),
-            ["--item", "12", "--target", "cquinones/dev"]
+            item_args(12, "team/next"),
+            ["--item", "12", "--target", "team/next"]
         );
     }
 

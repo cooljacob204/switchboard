@@ -292,10 +292,10 @@ pub(crate) mod tests {
 
         // Its branches, loose and packed, nested ones by their whole name,
         // and the default with no origin the local main.
-        assert!(git(&main, &["branch", "cquinones/dev"]));
+        assert!(git(&main, &["branch", "team/next"]));
         assert_eq!(
             local_branches(&main.join(".git")),
-            ["cquinones/dev", "eng-42-fix", "main", "other"]
+            ["eng-42-fix", "main", "other", "team/next"]
         );
         assert_eq!(default_branch(&main.join(".git")).as_deref(), Some("main"));
     }

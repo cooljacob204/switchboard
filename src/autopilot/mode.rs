@@ -424,7 +424,7 @@ mod tests {
             m.on = true;
             m.spend_limit = 20.0;
             m.note_id = "n-0123456789ab".into();
-            m.target = "cquinones/dev".into();
+            m.target = "team/next".into();
             m.skipped.push(Skipped {
                 note: m.note_id.clone(),
                 text: "One".into(),
@@ -443,8 +443,8 @@ mod tests {
         assert_eq!(written["note"], "Work.md");
         assert_eq!(written["noteId"], "n-0123456789ab");
         assert_eq!(written["landWithoutAsking"], false);
-        assert_eq!(written["target"], "cquinones/dev");
-        assert_eq!(Mode::read(&dir).target, "cquinones/dev");
+        assert_eq!(written["target"], "team/next");
+        assert_eq!(Mode::read(&dir).target, "team/next");
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -529,12 +529,12 @@ mod tests {
 
     #[test]
     fn land_on_lists_the_default_branch_first_then_the_others_then_another() {
-        let branches = ["x".to_string(), "main".into(), "cquinones/dev".into()];
+        let branches = ["x".to_string(), "main".into(), "team/next".into()];
         assert_eq!(
             target_choices(Some("main"), &branches, &[]),
             [
                 ("main (the default branch)".to_string(), String::new()),
-                ("cquinones/dev".into(), "cquinones/dev".into()),
+                ("team/next".into(), "team/next".into()),
                 ("x".into(), "x".into()),
                 ("Another branch…".into(), ANOTHER_BRANCH.into()),
             ]
@@ -554,7 +554,7 @@ mod tests {
         let branches = [
             "z".to_string(),
             "main".into(),
-            "cquinones/dev".into(),
+            "team/next".into(),
             "a".into(),
         ];
         let values = |recent: &[&str]| -> Vec<String> {
@@ -567,18 +567,18 @@ mod tests {
         // The default branch by its own time among them, a branch gone left
         // out, the rest by name.
         assert_eq!(
-            values(&["z", "", "gone", "cquinones/dev"]),
-            ["z", "", "cquinones/dev", "a", ANOTHER_BRANCH]
+            values(&["z", "", "gone", "team/next"]),
+            ["z", "", "team/next", "a", ANOTHER_BRANCH]
         );
         // The default branch typed by its name counts as picked, once.
         assert_eq!(
             values(&["main", "z", ""]),
-            ["", "z", "a", "cquinones/dev", ANOTHER_BRANCH]
+            ["", "z", "a", "team/next", ANOTHER_BRANCH]
         );
         // Never picked, the default branch leads the rest.
         assert_eq!(
-            values(&["cquinones/dev"]),
-            ["cquinones/dev", "", "a", "z", ANOTHER_BRANCH]
+            values(&["team/next"]),
+            ["team/next", "", "a", "z", ANOTHER_BRANCH]
         );
     }
 }
