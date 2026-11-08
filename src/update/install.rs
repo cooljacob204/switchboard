@@ -2,8 +2,9 @@
 //! safely as setup.sh's pinned downloads were: the archive is checked
 //! against the SHA-256 published beside it before anything is unpacked
 //! (setup.sh's `font_sha256` and `mermaid_ascii` checks), the binary in it
-//! is written beside the old one and run once (`--version`) to show it
-//! starts on this computer, and only then renamed over the old one, which
+//! is written beside the old one, as `switchboard` in a folder of its own,
+//! and run once (`--version`) to show it starts on this computer, and only
+//! then renamed over the old one, which
 //! is a single step: whatever fails before it leaves the old binary exactly
 //! as it was, and nothing half-written is ever in its place.
 //!
@@ -108,15 +109,22 @@ pub fn replace(target: &Path, binary: &[u8]) -> Result<String> {
         .file_name()
         .ok_or_else(|| anyhow!("{} has no name", target.display()))?
         .to_string_lossy();
-    let new = dir.join(format!(".{name}.new-{}", std::process::id()));
-    let result = write_and_check(&new, binary).and_then(|said| {
-        fs::rename(&new, target)
-            .with_context(|| format!("couldn't put it in place of {}", target.display()))?;
-        Ok(said)
-    });
-    if result.is_err() {
-        let _ = fs::remove_file(&new);
-    }
+    // A folder of its own beside the old binary, on the same disk so the
+    // rename is one step, holding it as `switchboard`: the binary takes a
+    // name that isn't a command's as `switchboard`, but a release from
+    // before it did read `.switchboard.new-<pid>` as a command it lacks.
+    let folder = dir.join(format!(".{name}.new-{}", std::process::id()));
+    let new = folder.join("switchboard");
+    let result = fs::create_dir(&folder)
+        .with_context(|| format!("couldn't write in {}", dir.display()))
+        .and_then(|()| write_and_check(&new, binary))
+        .and_then(|said| {
+            fs::rename(&new, target)
+                .with_context(|| format!("couldn't put it in place of {}", target.display()))?;
+            Ok(said)
+        });
+    let _ = fs::remove_file(&new);
+    let _ = fs::remove_dir(&folder);
     result
 }
 
@@ -260,12 +268,19 @@ mod tests {
 
     const OLD: &[u8] = b"#!/bin/sh\necho 'switchboard 0.1.0 (old)'\n";
 
+    /// A stand-in release that, as switchboard 0.2.0 did, says its version
+    /// only when its file is named `switchboard`, reading any other name as
+    /// a command it doesn't have (tests/common/stand_in.rs).
+    fn release(version: &str) -> Vec<u8> {
+        crate::stand_in::Release::new(version).script().into_bytes()
+    }
+
     #[test]
     fn a_binary_that_runs_takes_the_old_ones_place() {
         let dir = temp("ok");
         let target = dir.join("switchboard");
         fs::write(&target, OLD).unwrap();
-        let said = replace(&target, b"#!/bin/sh\necho 'switchboard 0.2.0 (abc)'\n").unwrap();
+        let said = replace(&target, &release("0.2.0 (abc)")).unwrap();
         assert_eq!(said, "0.2.0 (abc)");
         assert!(fs::read_to_string(&target).unwrap().contains("0.2.0"));
         assert_eq!(
@@ -282,6 +297,8 @@ mod tests {
         let dir = temp("bad");
         let target = dir.join("switchboard");
         fs::write(&target, OLD).unwrap();
+        // Broken on purpose: not a program, one that fails, and one that
+        // doesn't say it is switchboard.
         for broken in [
             &b"\x7fELF not really a binary"[..],
             b"#!/bin/sh\nexit 3\n",
@@ -303,7 +320,7 @@ mod tests {
         // Root writes anywhere, so there is nothing to show as root.
         let writable = fs::write(dir.join("probe"), b"").is_ok();
         if !writable {
-            let err = replace(&target, b"#!/bin/sh\necho 'switchboard 0.2.0'\n").unwrap_err();
+            let err = replace(&target, &release("0.2.0")).unwrap_err();
             assert!(err.to_string().contains("couldn't write"));
             assert_eq!(fs::read(&target).unwrap(), OLD);
         }

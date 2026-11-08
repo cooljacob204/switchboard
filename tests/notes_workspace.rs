@@ -17,6 +17,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use common::stand_in::Claude;
 use common::{TempDir, TestClient, TestServer};
 use serde_json::{Value, json};
 
@@ -33,16 +34,22 @@ struct Rig {
 
 impl Rig {
     fn new() -> Rig {
+        Rig::with(json!({}))
+    }
+
+    /// A rig whose server starts with these settings too, read before it
+    /// does anything, so no key waits on its reading them again.
+    fn with(extra: Value) -> Rig {
         let dir = TempDir::new("sbn");
         let notes = dir.path().join("Notes");
         std::fs::create_dir_all(notes.join("Work")).unwrap();
         std::fs::write(notes.join("Plan.md"), "# Plan\n\n- [ ] the first thing\n").unwrap();
         let settings = dir.path().join("settings.json");
-        std::fs::write(
-            &settings,
-            json!({ "tips": false, "notifications": false, "ask_tab_note": false }).to_string(),
-        )
-        .unwrap();
+        let mut all = json!({ "tips": false, "notifications": false, "ask_tab_note": false });
+        for (k, v) in extra.as_object().unwrap() {
+            all[k] = v.clone();
+        }
+        std::fs::write(&settings, all.to_string()).unwrap();
         // The app's socket: each request kept, and answered as the app
         // answers.
         let socket = dir.path().join("n.sock");
@@ -265,15 +272,9 @@ fn notes_left_alone_in_a_tab_it_was_brought_beside_goes_home() {
 fn press_runs_an_action_by_name_and_opens_a_notes_tab() {
     let rig = Rig::new();
     // A stand-in Claude that keeps what it was started with.
-    let bin = rig.server.home.join("bin");
-    std::fs::create_dir_all(&bin).unwrap();
-    let claude = bin.join("claude");
-    std::fs::write(
-        &claude,
-        "#!/bin/sh\nfor a in \"$@\"; do printf '%s\\n' \"$a\"; done > \"$HOME/claude-args\"\nexec sleep 30\n",
-    )
-    .unwrap();
-    std::fs::set_permissions(&claude, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    Claude::new()
+        .answer("for a in \"$@\"; do printf '%s\\n' \"$a\"; done > \"$HOME/claude-args\"\nexec sleep 30")
+        .install(&rig.server.home.join("bin"));
     let mut client = rig.server.attach(140, 36);
     client.wait_text("$");
 
@@ -342,14 +343,8 @@ fn note_written(rig: &Rig, rel: &str, title: &str) {
 
 #[test]
 fn enter_on_a_new_notes_notification_opens_the_note_in_notes() {
-    let rig = Rig::new();
     // With the Notifications window off, Enter in the sidebar acts at once.
-    std::fs::write(
-        rig.dir.path().join("settings.json"),
-        json!({ "tips": false, "notifications": false, "ask_tab_note": false, "notice_list": false })
-            .to_string(),
-    )
-    .unwrap();
+    let rig = Rig::with(json!({ "notice_list": false }));
     note_written(&rig, "Plan.md", "Plan");
     let mut client = rig.server.attach(140, 36);
     client.wait_text("● New note: Plan");

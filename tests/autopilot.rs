@@ -15,6 +15,7 @@ use std::path::Path;
 use std::process::Command;
 use std::time::{Duration, Instant, SystemTime};
 
+use common::stand_in::Claude;
 use common::{TempDir, TestClient, TestServer};
 use serde_json::{Value, json};
 
@@ -94,16 +95,9 @@ fn set_up(
         .unwrap()
         .extend(more.as_object().unwrap().clone());
     std::fs::write(config.join("settings.json"), settings.to_string()).unwrap();
-    let bin = server.home.join("bin");
-    std::fs::create_dir_all(&bin).unwrap();
-    let claude = bin.join("claude");
-    std::fs::write(
-        &claude,
-        "#!/bin/sh\necho \"$PWD\" >> \"$HOME/claude-ran\"\n",
-    )
-    .unwrap();
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::set_permissions(&claude, std::fs::Permissions::from_mode(0o755)).unwrap();
+    Claude::new()
+        .answer("echo \"$PWD\" >> \"$HOME/claude-ran\"")
+        .install(&server.home.join("bin"));
     let repo = server.home.join("repo");
     std::fs::create_dir_all(&repo).unwrap();
     git(&repo, &["init", "-q"]);

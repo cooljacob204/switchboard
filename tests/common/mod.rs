@@ -21,6 +21,9 @@ use alacritty_terminal::term::{Config, Term};
 use alacritty_terminal::vte::ansi::Processor;
 use switchboard::mux::proto::{self, ClientMsg, ServerMsg};
 
+pub mod http;
+pub mod stand_in;
+
 pub const BIN: &str = env!("CARGO_BIN_EXE_switchboard");
 
 static NEXT: AtomicU32 = AtomicU32::new(0);
@@ -153,9 +156,43 @@ impl TestServer {
         self.launch();
     }
 
+    /// Strict stand-ins for the programs the server may run that the test
+    /// gave none of, first on its PATH, so a test never reaches the real one
+    /// on the computer it runs on: a Claude Code and a gh that aren't signed
+    /// in (a real Claude on a Mac signs in through the Keychain, not `~`, so
+    /// its connector calls would reach the person's own services), and the
+    /// desktop's clipboard and openers, which write to the test's home
+    /// rather than the person's clipboard and desktop. A test's own, written
+    /// over them, wins; lazygit is left out, since a test shows the key
+    /// saying it isn't installed.
+    fn stand_ins(&self) {
+        let bin = self.home.join("bin");
+        if !bin.join("claude").exists() {
+            stand_in::Claude::signed_out().install(&bin);
+        }
+        if !bin.join("gh").exists() {
+            stand_in::Gh::new().install(&bin);
+        }
+        let desktop: Vec<&str> = stand_in::OPENERS
+            .iter()
+            .chain(stand_in::CLIPBOARD)
+            .chain(stand_in::CHROMES)
+            .chain(&["osascript"])
+            .copied()
+            .filter(|tool| !bin.join(tool).exists())
+            .collect();
+        stand_in::desktop(
+            &bin,
+            &desktop,
+            &self.home.join("desktop-log"),
+            &self.home.join("clipboard"),
+        );
+    }
+
     /// Starts the server, its output appended to `server.log`, and waits
     /// for it to listen.
     fn launch(&mut self) {
+        self.stand_ins();
         let log = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
@@ -202,7 +239,7 @@ impl TestServer {
 
     /// The environment every process of the test runs with: its own home and
     /// state, a plain shell with a prompt that is easy to find, and the
-    /// home's `bin` first on the PATH, for a test's stand-ins for programs.
+    /// home's `bin` first on the PATH, for the stand-ins for programs.
     fn env(cmd: &mut Command, home: &Path, state: &Path) {
         let path = std::env::var("PATH").unwrap_or_default();
         cmd.env("HOME", home)
@@ -221,7 +258,13 @@ impl TestServer {
             .env_remove("SWITCHBOARD_SETTINGS")
             .env_remove("CLAUDE_CODE_PLUGIN_DIRS")
             .env_remove("TMUX")
-            .env_remove("TMUX_PANE");
+            .env_remove("TMUX_PANE")
+            // No token of the person running the tests reaches a stand-in
+            // service, which would refuse it as GitHub refuses a wrong one;
+            // a test gives its own (`start_with_env`).
+            .env_remove("GH_TOKEN")
+            .env_remove("GITHUB_TOKEN")
+            .env_remove("LINEAR_API_KEY");
     }
 
     pub fn socket(&self) -> PathBuf {
@@ -292,8 +335,14 @@ impl TestServer {
 }
 
 impl Drop for TestServer {
+    /// Ends the server, then fails the test if a stand-in on its PATH
+    /// refused a call: the code made one the real program would refuse,
+    /// however quietly it took the failure.
     fn drop(&mut self) {
         self.stop();
+        if !std::thread::panicking() {
+            stand_in::assert_none_refused(&self.home.join("bin"));
+        }
     }
 }
 
