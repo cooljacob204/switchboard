@@ -134,6 +134,9 @@ pub struct Options {
     pub clipboard: bool,
     /// The workspace's server is told of notes moving (a pane of it).
     pub server: bool,
+    /// UX 2.0 (ux2): chips under a checklist item saying what is happening
+    /// with it.
+    pub ux2: bool,
 }
 
 impl Default for Options {
@@ -156,6 +159,7 @@ impl Default for Options {
             pane_arrows: true,
             clipboard: false,
             server: false,
+            ux2: false,
         }
     }
 }
@@ -185,6 +189,9 @@ impl Options {
             pane_arrows: on("pane_arrows"),
             clipboard: true,
             server: crate::mux::socket::in_pane(),
+            ux2: all
+                .iter()
+                .any(|s| s.key == "ux2" && s.value == serde_json::Value::Bool(true)),
             ..Options::default()
         }
     }
@@ -256,6 +263,13 @@ pub(crate) enum Shown {
         indent: u16,
         bg: Option<render::Hl>,
     },
+    /// UX 2.0's chips on a line of their own under a checklist item, at
+    /// the column its text starts.
+    Chips {
+        row: usize,
+        chips: Vec<render::Chip>,
+        indent: u16,
+    },
     Fold {
         row: usize,
         text: String,
@@ -270,7 +284,10 @@ pub(crate) enum Shown {
 impl Shown {
     fn row(&self) -> usize {
         match self {
-            Shown::Text { row, .. } | Shown::Fold { row, .. } | Shown::Picture { row, .. } => *row,
+            Shown::Text { row, .. }
+            | Shown::Chips { row, .. }
+            | Shown::Fold { row, .. }
+            | Shown::Picture { row, .. } => *row,
         }
     }
 }
