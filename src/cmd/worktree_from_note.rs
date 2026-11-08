@@ -111,14 +111,17 @@ pub fn claimed_lately(text: &str, note_id: Option<&str>, note: &str, now: i64) -
 
 fn usage() -> ExitCode {
     eprintln!(
-        "Usage: worktree-from-note [path] --note <note> --item <line> [--prompt <text>]\n       \
+        "Usage: worktree-from-note [path] --note <note> --item <line> [--prompt <text>] [--target <branch>]\n       \
          worktree-from-note init <zsh|bash>\n\n\
          Examples:\n  \
          worktree-from-note --note \"Switchboard Notes\" --item 12\n\n\
          Path defaults to {} under the repo root.\n\
          --prompt adds to the prompt Claude starts with. The wtn function also takes\n\
          it from WT_PROMPT, and the note from WTN_NOTE, clearing both, so /wtn can\n\
-         hand them over.",
+         hand them over.\n\
+         --target cuts the item's branch from that local branch rather than the default\n\
+         branch, and records it as branch.<branch>.wtnTarget, which queue-and-clean\n\
+         lands it on (autopilot's target).",
         worktree::DEFAULT_WORKTREE_DIR
     );
     ExitCode::from(1)
@@ -508,7 +511,10 @@ pub fn notes_newest_first(notes: &Path) -> Vec<String> {
 /// the worktree /wtn was run in, whose own commits would then land with this
 /// item's. A fetch that fails stops it, since the main clone's unpushed
 /// commits would otherwise land with the item.
-fn start_point(root: &Path) -> Result<String, String> {
+fn start_point(root: &Path, target: Option<&str>) -> Result<String, String> {
+    if let Some(target) = target {
+        return target_start(root, target);
+    }
     if !worktree::remotes(root).iter().any(|r| r == "origin") {
         return worktree::git_at(root, &["rev-parse", "HEAD"]).map_err(|e| e.to_string());
     }
@@ -535,8 +541,70 @@ fn start_point(root: &Path) -> Result<String, String> {
     }
 }
 
+/// The commit an item's branch starts from when it lands on `target`, a
+/// local branch (made from origin's when only origin has it): that branch
+/// as it is here, after bringing in what its
+/// remote branch has, when it tracks one, so the work starts where the
+/// landing will rebase it onto. A fetch that fails is said and passed over,
+/// since the landing fetches again.
+fn target_start(root: &Path, target: &str) -> Result<String, String> {
+    let local = format!("refs/heads/{target}");
+    let exists = |r: &str| worktree::git_ok(root, &["rev-parse", "--verify", "--quiet", r]);
+    // One on origin alone, typed for "Another branch…", made a local
+    // branch tracking it.
+    if !exists(&local)
+        && worktree::remotes(root).iter().any(|r| r == "origin")
+        && worktree::fetch_branch(root, "origin", target, "wtn: fetch the target")
+        && exists(&format!("refs/remotes/origin/{target}"))
+    {
+        worktree::git_ok(
+            root,
+            &[
+                "branch",
+                "--quiet",
+                "--track",
+                target,
+                &format!("origin/{target}"),
+            ],
+        );
+    }
+    if !exists(&local) {
+        return Err(format!(
+            "no branch {target} here or on origin, which autopilot lands this item on"
+        ));
+    }
+    if let Some((remote, branch)) = tracked(root, target)
+        && !worktree::fetch_branch(root, &remote, &branch, "wtn: fetch the target")
+    {
+        eprintln!("Couldn't fetch {remote}/{branch}; starting from {target} as it is here");
+    }
+    Ok(local)
+}
+
+/// The remote branch a local branch tracks, by its remote and its name
+/// there, from git's config; `None` for a branch that tracks none.
+pub fn tracked(root: &Path, branch: &str) -> Option<(String, String)> {
+    let get = |key: &str| {
+        worktree::git_at(
+            root,
+            &["config", "--get", &format!("branch.{branch}.{key}")],
+        )
+        .ok()
+        .filter(|v| !v.is_empty())
+    };
+    let remote = get("remote").filter(|r| r != ".")?;
+    let merge = get("merge")?;
+    Some((
+        remote,
+        merge
+            .strip_prefix("refs/heads/")
+            .unwrap_or(&merge)
+            .to_string(),
+    ))
+}
+
 pub fn main(args: Vec<String>) -> ExitCode {
-    let given = match Given::parse(&args, &["--prompt", "--note", "--item"]) {
+    let given = match Given::parse(&args, &["--prompt", "--note", "--item", "--target"]) {
         Ok(g) => g,
         Err(flag) if flag == "--cd-file" => return worktree::fail("--cd-file requires a path"),
         Err(flag) => return worktree::fail(&format!("{flag} requires a value")),
@@ -713,7 +781,8 @@ fn run(given: &Given, note: &str, item: &str) -> Result<ExitCode, String> {
             identity.replace('\'', r"'\''")
         ));
     }
-    let start = start_point(&root)?;
+    let target = given.last("--target").filter(|t| !t.is_empty());
+    let start = start_point(&root, target)?;
     let purpose = Purpose {
         work: "item",
         command: "wtn",
@@ -725,6 +794,21 @@ fn run(given: &Given, note: &str, item: &str) -> Result<ExitCode, String> {
         return Err(format!("could not record the item in git config ({key})"));
     }
     claim(&note_id, &first);
+    // The branch it lands on, read by `switchboard landing` for
+    // queue-and-clean; none, the default branch.
+    let target_key = format!("branch.{branch}.wtnTarget");
+    let recorded_target = match target {
+        Some(t) => worktree::git_ok(&root, &["config", &target_key, t]),
+        None => {
+            worktree::git_ok(&root, &["config", "--unset", &target_key]);
+            true
+        }
+    };
+    if !recorded_target {
+        return Err(format!(
+            "could not record the target in git config ({target_key})"
+        ));
+    }
     worktree::link_local_settings(&root, &path).map_err(|e| e.to_string())?;
 
     let extra = worktree::one_line(&given.all("--prompt").join(" "));
@@ -741,10 +825,16 @@ fn run(given: &Given, note: &str, item: &str) -> Result<ExitCode, String> {
                 .to_string()
         }
     };
+    let onto = match target {
+        Some(t) => format!(
+            "{t}, the branch it was cut from (its target, which `switchboard landing` names)"
+        ),
+        None => "the default branch".to_string(),
+    };
     let mut prompt = format!(
         "Work on this checklist item from my note \"{title}\" ({}), line {item} there, as written:\n\n<item>\n{block}\n</item>\n\n{plan_words}\
          Commit the work on this worktree's branch, following the repository's CLAUDE.md, and don't push it or tick the item in the note. \
-         When the work is done, say so in a line, then land it as /queue-and-clean does, which only I can start, so read the file `switchboard skill-path queue-and-clean` prints and follow it: it asks me before pushing, lands it and ticks the item, as `switchboard landing` says for the repository: straight on the default branch, with the steps it gives, or else through a PR it offers to open.",
+         When the work is done, say so in a line, then land it as /queue-and-clean does, which only I can start, so read the file `switchboard skill-path queue-and-clean` prints and follow it: it asks me before pushing, lands it and ticks the item, as `switchboard landing` says for the repository: straight on {onto}, with the steps it gives, or else through a PR it offers to open.",
         file.display()
     );
     if !extra.is_empty() {

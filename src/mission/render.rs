@@ -2348,6 +2348,7 @@ mod tests {
             skipped: 1,
             spend_limit: 0.0,
             lands_alone: false,
+            target: String::new(),
         });
         m.cursor = -1;
         let (lines, hits) = screen(&m, 120, 30);

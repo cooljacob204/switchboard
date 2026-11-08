@@ -37,6 +37,8 @@ pub struct Summary {
     pub spend_limit: f64,
     /// Its tabs land without asking.
     pub lands_alone: bool,
+    /// The branch its tabs land on; empty for the default branch.
+    pub target: String,
 }
 
 impl Summary {
@@ -52,14 +54,18 @@ impl Summary {
                 self.busy, self.slots, self.open, self.cap
             )
         };
-        let mut facts = vec![
+        let mut facts = Vec::new();
+        if !self.target.is_empty() {
+            facts.push(format!("→ {}", self.target));
+        }
+        facts.extend([
             how,
             if self.next.is_empty() {
                 "nothing left to take".to_string()
             } else {
                 format!("next: {}", self.next)
             },
-        ];
+        ]);
         if self.skipped > 0 {
             facts.push(format!("{} skipped", self.skipped));
         }
@@ -136,6 +142,8 @@ pub enum Act {
     PlannedOnly(bool),
     /// The note, slots, cap and spend limit asked for again.
     Change,
+    /// "Land on:" asked again.
+    ChangeTarget,
     Stop,
     /// Mission control's Tabs, where its line is.
     ToTabs,
@@ -154,13 +162,13 @@ pub enum Act {
 /// what it keeps.
 pub fn land_question() -> (String, Vec<String>) {
     (
-        "Land its tabs on the default branch without asking to push?".into(),
+        "Land its tabs on their target branch without asking to push?".into(),
         vec![
             "Skipped: the question before each push, and medium review findings, fixed without asking".into(),
             "Kept: the tests, two clean review rounds, the landing lock, leak-check; a repository whose landing runs no tests or no review still asks".into(),
             "Asked after all: anything leak-check finds, an unclear conflict, a failure the branch didn't cause".into(),
             "Told after each landing, in the notifications and on Slack".into(),
-            "Only for landings straight on the default branch; tabs open now too".into(),
+            "Only for landings straight on a branch; tabs open now too".into(),
         ],
     )
 }
@@ -220,6 +228,11 @@ pub fn choices(mode: &Mode, next: &str, close: &str) -> Vec<(char, String, Act)>
         )
     });
     out.push((
+        'b',
+        "Change the target branch…".to_string(),
+        Act::ChangeTarget,
+    ));
+    out.push((
         'n',
         "Change its note, slots, cap or spend limit…".to_string(),
         Act::Change,
@@ -278,7 +291,9 @@ pub fn apply(act: &Act, mode: &mut Mode) -> Option<String> {
             mode.land_without_asking = false;
             "Its tabs ask before they land again; those open now too".to_string()
         }
-        Act::Change | Act::ToTabs | Act::Dismiss | Act::CycleClose => return None,
+        Act::Change | Act::ChangeTarget | Act::ToTabs | Act::Dismiss | Act::CycleClose => {
+            return None;
+        }
     })
 }
 
@@ -308,6 +323,7 @@ mod tests {
             skipped: 1,
             spend_limit: 0.0,
             lands_alone: false,
+            target: String::new(),
         }
     }
 
@@ -332,6 +348,15 @@ mod tests {
             line(&alone, 160, false, false, &Theme::DARK)
                 .text()
                 .contains(" · lands on its own")
+        );
+        let targeted = Summary {
+            target: "cquinones/dev".into(),
+            ..summary()
+        };
+        assert!(
+            line(&targeted, 160, false, false, &Theme::DARK)
+                .text()
+                .starts_with(" AUTO Work  → cquinones/dev · 2 of 3 working")
         );
         let paused = Summary {
             paused: true,
@@ -374,6 +399,7 @@ mod tests {
                 "Take only items with a settled plan",
                 "Close landed tabs: when seen",
                 "Land without asking",
+                "Change the target branch…",
                 "Change its note, slots, cap or spend limit…",
                 "Stop working the note"
             ]

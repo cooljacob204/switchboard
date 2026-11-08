@@ -3187,6 +3187,7 @@ mod tests {
             skipped: 0,
             spend_limit: 0.0,
             lands_alone: false,
+            target: String::new(),
         });
         m.cursor = 1;
         let to = row_step(&m, -1);
