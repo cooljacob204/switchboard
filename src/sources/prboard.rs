@@ -56,7 +56,7 @@ pub fn item_of(pr: &Value) -> Option<Item> {
         repo.split('/').nth(1).unwrap_or("").to_string(),
         match checks {
             _ if failing => "✗ checks".into(),
-            "PENDING" => "⏳ checks".into(),
+            "PENDING" => format!("{} checks", crate::sidebar::text::pending_mark()),
             "SUCCESS" => "✓ checks".into(),
             _ => String::new(),
         },

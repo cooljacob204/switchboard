@@ -968,7 +968,8 @@ fn state_only(tab: &TabModel, r: &Rules) -> String {
 pub fn pr_facts(tab: &TabModel) -> Vec<String> {
     let mut out = Vec::new();
     if let Some(c) = tab.checks {
-        let marks: Vec<String> = [("✓", c.pass), ("✗", c.fail), ("⏳", c.pending)]
+        let pending = crate::sidebar::text::pending_mark();
+        let marks: Vec<String> = [("✓", c.pass), ("✗", c.fail), (pending, c.pending)]
             .iter()
             .filter(|(_, n)| *n > 0)
             .map(|(m, n)| format!("{m}{n}"))
