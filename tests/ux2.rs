@@ -52,3 +52,18 @@ fn with_ux2_a_header_names_the_tab_in_place_of_the_status_line() {
         server.list()["sessions"][0]["tabs"][0]["panes"][0]["rows"] == 23
     });
 }
+
+#[test]
+fn with_ux2_and_message_boxes_off_a_message_is_said_in_a_box() {
+    let server = TestServer::start();
+    settings(&server, json!({"ux2": true, "message_boxes": false}));
+    let mut client = server.attach(90, 24);
+    client.wait_for("the header", |s| s[2].contains("M-c  Claude"));
+    let pid = server.pid();
+    // With no status line to put it on, the message goes in a box, and the
+    // server goes on.
+    server.ok(&["say", "Nothing needs you."]);
+    client.wait_text("Nothing needs you.");
+    assert_eq!(server.pid(), pid);
+    server.list();
+}
