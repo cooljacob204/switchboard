@@ -778,6 +778,7 @@ impl Pilot {
             skipped: mode.skipped_here().count(),
             spend_limit: mode.spend_limit,
             lands_alone: mode.land_without_asking,
+            target: mode.target.clone(),
         }
     }
 }

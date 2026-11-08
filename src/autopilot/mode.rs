@@ -56,6 +56,9 @@ pub struct Mode {
     pub spend_limit: f64,
     /// Its tabs land on the default branch without asking to push.
     pub land_without_asking: bool,
+    /// The branch its tabs are cut from and land on; empty for the
+    /// repository's default branch.
+    pub target: String,
     /// What it has to say, in the notifications; empty for nothing.
     pub said: String,
     /// The landed tabs it closed without your seeing them, the last
@@ -112,6 +115,7 @@ impl Default for Mode {
             skipped: Vec::new(),
             spend_limit: 0.0,
             land_without_asking: false,
+            target: String::new(),
             said: String::new(),
             closed: Vec::new(),
         }
@@ -169,6 +173,7 @@ impl Mode {
                 .filter(|n| n.is_finite() && *n >= 0.0)
                 .unwrap_or(0.0),
             land_without_asking: flag("landWithoutAsking", d.land_without_asking),
+            target: text("target").unwrap_or_default(),
             said: text("said").unwrap_or_default(),
             closed: match map.get("closed") {
                 Some(Value::Array(list)) => list
@@ -219,6 +224,7 @@ impl Mode {
         );
         map.insert("spendLimit".into(), util::js_number(self.spend_limit));
         map.insert("landWithoutAsking".into(), self.land_without_asking.into());
+        map.insert("target".into(), self.target.into());
         map.insert("said".into(), self.said.into());
         map.insert(
             "closed".into(),
@@ -282,6 +288,47 @@ pub struct NoteChoices {
     pub rest: Vec<String>,
 }
 
+/// The value of "Another branch…" in the target's list, which no branch
+/// can be named (git refuses a `:` in one).
+pub const ANOTHER_BRANCH: &str = ":another";
+
+/// "Land on:"'s list, each option's label and value: the default branch
+/// first, its value empty so the mode keeps following it, then the other
+/// local branches, then "Another branch…" to type one.
+pub fn target_choices(default: Option<&str>, branches: &[String]) -> Vec<(String, String)> {
+    let mut out = vec![(
+        match default {
+            Some(d) => format!("{d} (the default branch)"),
+            None => "The default branch".to_string(),
+        },
+        String::new(),
+    )];
+    out.extend(
+        branches
+            .iter()
+            .filter(|b| Some(b.as_str()) != default)
+            .map(|b| (b.clone(), b.clone())),
+    );
+    out.push(("Another branch…".into(), ANOTHER_BRANCH.into()));
+    out
+}
+
+/// The branch typed for "Another branch…", or `None` for one git couldn't
+/// name (empty, a space, `..`, a `:` and the like).
+pub fn typed_branch(text: &str) -> Option<String> {
+    let t = text.trim();
+    let bad = t.is_empty()
+        || t.starts_with(['-', '/', '.'])
+        || t.ends_with(['/', '.'])
+        || t.ends_with(".lock")
+        || t.contains("..")
+        || t.contains("//")
+        || t.contains("@{")
+        || t.chars()
+            .any(|c| c.is_whitespace() || c.is_control() || "~^:?*[\\".contains(c));
+    (!bad).then(|| t.to_string())
+}
+
 /// The notes to pick from, each list the one the mode last worked first,
 /// then the most recently changed, leaving out deleted ones and every other
 /// dot-folder. Reads the whole directory and every note in it, so it is
@@ -333,6 +380,10 @@ mod tests {
         assert_eq!(mode.slots, 3, "a count that isn't one is the default");
         assert_eq!(mode.skipped, Vec::<Skipped>::new(), "Lua's empty object");
         assert_eq!(mode.spend_limit, 2.5);
+        assert_eq!(
+            mode.target, "",
+            "a state saved before targets lands on the default branch"
+        );
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -344,6 +395,7 @@ mod tests {
             m.on = true;
             m.spend_limit = 20.0;
             m.note_id = "n-0123456789ab".into();
+            m.target = "cquinones/dev".into();
             m.skipped.push(Skipped {
                 note: m.note_id.clone(),
                 text: "One".into(),
@@ -362,6 +414,8 @@ mod tests {
         assert_eq!(written["note"], "Work.md");
         assert_eq!(written["noteId"], "n-0123456789ab");
         assert_eq!(written["landWithoutAsking"], false);
+        assert_eq!(written["target"], "cquinones/dev");
+        assert_eq!(Mode::read(&dir).target, "cquinones/dev");
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -442,5 +496,27 @@ mod tests {
         );
         assert_eq!(note_title("Work/Plan's Notes.md"), "Plan's Notes");
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn land_on_lists_the_default_branch_first_then_the_others_then_another() {
+        let branches = ["cquinones/dev".to_string(), "main".into(), "x".into()];
+        assert_eq!(
+            target_choices(Some("main"), &branches),
+            [
+                ("main (the default branch)".to_string(), String::new()),
+                ("cquinones/dev".into(), "cquinones/dev".into()),
+                ("x".into(), "x".into()),
+                ("Another branch…".into(), ANOTHER_BRANCH.into()),
+            ]
+        );
+        assert_eq!(target_choices(None, &[])[0].0, "The default branch");
+        assert_eq!(
+            typed_branch(" release/1.2 ").as_deref(),
+            Some("release/1.2")
+        );
+        for bad in ["", "a b", "a..b", "-x", "x:y", "x.lock", "x/"] {
+            assert_eq!(typed_branch(bad), None, "{bad}");
+        }
     }
 }

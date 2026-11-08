@@ -138,6 +138,56 @@ fn ref_exists(git_dir: &Path, common_dir: &Path, name: &str) -> bool {
     })
 }
 
+/// The repository's local branches, by name, sorted: the files under
+/// `refs/heads/` in the shared directory, and `packed-refs`' lines for them.
+/// Reads files only, though a directory of many branches is read whole, so
+/// it runs off the server's task.
+pub fn local_branches(common_dir: &Path) -> Vec<String> {
+    fn walk(dir: &Path, prefix: &str, out: &mut Vec<String>) {
+        let Ok(entries) = fs::read_dir(dir) else {
+            return;
+        };
+        for e in entries.flatten() {
+            let name = format!("{prefix}{}", e.file_name().to_string_lossy());
+            if e.file_type().is_ok_and(|t| t.is_dir()) {
+                walk(&e.path(), &format!("{name}/"), out);
+            } else {
+                out.push(name);
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(&common_dir.join("refs/heads"), "", &mut out);
+    if let Ok(packed) = fs::read_to_string(common_dir.join("packed-refs")) {
+        out.extend(
+            packed
+                .lines()
+                .filter(|l| !l.starts_with('#') && !l.starts_with('^'))
+                .filter_map(|l| l.split_once(' '))
+                .filter_map(|(_, r)| r.trim().strip_prefix("refs/heads/"))
+                .map(str::to_string),
+        );
+    }
+    out.sort();
+    out.dedup();
+    out
+}
+
+/// The repository's default branch: what `refs/remotes/origin/HEAD` names,
+/// else `main` or `master`, whichever is a local branch.
+pub fn default_branch(common_dir: &Path) -> Option<String> {
+    if let Ok(head) = fs::read_to_string(common_dir.join("refs/remotes/origin/HEAD"))
+        && let Some(name) = head.trim().strip_prefix("ref: refs/remotes/origin/")
+    {
+        return Some(name.to_string());
+    }
+    let local = local_branches(common_dir);
+    ["main", "master"]
+        .into_iter()
+        .find(|b| local.iter().any(|l| l == b))
+        .map(str::to_string)
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
@@ -226,6 +276,15 @@ pub(crate) mod tests {
         assert!(git(&main, &["pack-refs", "--all"]));
         assert_eq!(locate(&main).unwrap().branch, "eng-42-fix");
         assert_eq!(locate(&wt).unwrap().branch, "other");
+
+        // Its branches, loose and packed, nested ones by their whole name,
+        // and the default with no origin the local main.
+        assert!(git(&main, &["branch", "cquinones/dev"]));
+        assert_eq!(
+            local_branches(&main.join(".git")),
+            ["cquinones/dev", "eng-42-fix", "main", "other"]
+        );
+        assert_eq!(default_branch(&main.join(".git")).as_deref(), Some("main"));
     }
 
     #[test]

@@ -827,7 +827,7 @@ impl Server {
                     };
                     let tabs: Vec<TabId> = chosen
                         .into_iter()
-                        .filter_map(|item| server.open_item_tab(client, &repo, &note, item))
+                        .filter_map(|item| server.open_item_tab(client, &repo, &note, item, ""))
                         .collect();
                     server.front(client, &tabs);
                 });
@@ -841,20 +841,23 @@ impl Server {
     /// `@tab_note`), running `wtn --item <line>` with the
     /// note's path in WTN_NOTE, so only the line number is a word of the
     /// command. What autopilot opens for each item it
-    /// takes too (wtn-open.zsh's `open_tab`).
+    /// takes too (wtn-open.zsh's `open_tab`), with `--target` naming the
+    /// branch its worktree is cut from and lands on (autopilot's target);
+    /// empty for the default branch.
     pub fn open_item_tab(
         &mut self,
         client: ClientId,
         repo: &Path,
         note: &str,
         item: &worktree_from_note::Item,
+        target: &str,
     ) -> Option<TabId> {
         let mut command = vec!["env".to_string(), format!("WTN_NOTE={note}")];
-        command.extend(worktree::tab_running(
-            "worktree-from-note",
-            "wtn",
-            &["--item".into(), item.line.to_string()],
-        ));
+        let mut args = vec!["--item".to_string(), item.line.to_string()];
+        if !target.is_empty() {
+            args.extend(["--target".to_string(), target.to_string()]);
+        }
+        command.extend(worktree::tab_running("worktree-from-note", "wtn", &args));
         let tab = self.work_tab(client, repo, command, false)?;
         // Named with the item cut short, for the tab bar and the second
         // status line, its whole first line kept as the tab's full title,

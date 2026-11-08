@@ -94,11 +94,26 @@ fn turning_it_on_opens_a_tab_for_the_notes_next_item_then_the_next_and_says_when
     git(&repo, &["init", "-q"]);
     git(&repo, &["symbolic-ref", "HEAD", "refs/heads/main"]);
     git(&repo, &["commit", "-q", "--allow-empty", "-m", "start"]);
+    git(&repo, &["branch", "cquinones/dev"]);
     let repo = repo.canonicalize().unwrap();
 
     let mut client = server.attach(120, 40);
     client.wait_text("$");
     server.ok(&["new-tab", "-c", repo.to_str().unwrap()]);
+    client.type_text("\x1bp");
+    client.wait_text("action>");
+    client.type_text("autopilot");
+    client.wait_text("Autopilot: work a note");
+    client.type_text("\r");
+    // A repository landing through a PR, as one with no GitHub and no
+    // repos.json does, is refused.
+    client.wait_text("Autopilot lands only straight onto a branch for now");
+    std::fs::write(
+        config.join("repos.json"),
+        json!({ repo.join(".git").to_str().unwrap(): { "landing": "direct" } }).to_string(),
+    )
+    .unwrap();
+    client.type_text("\x1b\x1b");
     client.type_text("\x1bp");
     client.wait_text("action>");
     client.type_text("autopilot");
@@ -115,13 +130,24 @@ fn turning_it_on_opens_a_tab_for_the_notes_next_item_then_the_next_and_says_when
         "a note with nothing unticked is behind More notes…"
     );
     client.type_text("\r");
+    // Where it lands: the default branch first, so Enter keeps it.
+    let screen = client.wait_text("Another branch…");
+    assert!(
+        screen
+            .iter()
+            .any(|l| l.contains("main (the default branch)"))
+    );
+    assert!(screen.iter().any(|l| l.contains("cquinones/dev")));
+    client.type_text("\r");
     client.wait_text("Tabs working at once");
     client.type_text("\r");
     client.wait_text("Tabs open at most");
     client.type_text("\r");
     client.wait_text("Spend limit");
     client.type_text("\r");
-    client.wait_text("Working Work: 3 at a time, up to 5 tabs, in ~/repo");
+    client.wait_text(
+        "Working Work: 3 at a time, up to 5 tabs, in ~/repo, landing on the default branch",
+    );
     client.wait_text("AUTO Work");
 
     let mode: Value = serde_json::from_str(
@@ -139,6 +165,7 @@ fn turning_it_on_opens_a_tab_for_the_notes_next_item_then_the_next_and_says_when
     // up, so a rename anywhere is followed.
     let note_id = switchboard::notes::id::of_file(&note).expect("the note given an ID");
     assert_eq!(mode["noteId"], note_id.as_str());
+    assert_eq!(mode["target"], "", "the default branch");
 
     wait("a tab for the first item", &server, || {
         opened(&server)
@@ -205,6 +232,21 @@ fn turning_it_on_opens_a_tab_for_the_notes_next_item_then_the_next_and_says_when
                 .all(|t| t["options"]["@autopilot_land"] == "1")
     });
     client.wait_text("lands on its own");
+
+    // Its menu's "Change the target branch…": the tabs it opens from now
+    // land on the branch picked, which its line names.
+    client.type_text("\r");
+    client.wait_text("Change the target branch…");
+    client.type_text("jjjj\r");
+    client.wait_text("Another branch…");
+    client.type_text("cquinones/dev\r");
+    wait("the target kept", &server, || {
+        std::fs::read_to_string(server.state.join("autopilot.json"))
+            .ok()
+            .and_then(|t| serde_json::from_str::<Value>(&t).ok())
+            .is_some_and(|m| m["target"] == "cquinones/dev")
+    });
+    client.wait_text("→ cquinones/dev");
 
     // Renamed outside Notes: followed by its ID, its new path kept.
     std::fs::create_dir_all(notes.path().join("Projects")).unwrap();

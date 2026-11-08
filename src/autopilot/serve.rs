@@ -155,9 +155,10 @@ impl Server {
         }
     }
 
-    /// Which note, how many tabs at once, the most open and a spend limit,
-    /// then the mode on, working the note in the main clone of `dir`'s
-    /// repository.
+    /// Which note, which branch to land on, how many tabs at once, the most
+    /// open and a spend limit, then the mode on, working the note in the
+    /// main clone of `dir`'s repository. A repository that lands through a
+    /// PR is refused: autopilot lands only straight onto a branch for now.
     fn autopilot_setup(&mut self, client: ClientId, dir: &Path) {
         let Some(repo) = main_clone(dir) else {
             self.mission_note(
@@ -169,10 +170,28 @@ impl Server {
         let notes = worktree_from_note::notes_dir();
         let was = Mode::read(&paths::state_dir());
         let last = was.note.clone();
+        let at = repo.clone();
         self.off_task(
             client,
-            move || mode::note_choices(&notes, &last),
-            move |server, client, notes| {
+            move || {
+                let landing = crate::repos::landing_for(&at, false).map(|l| l.landing);
+                (mode::note_choices(&notes, &last), landing)
+            },
+            move |server, client, (notes, landing)| {
+                match landing.as_deref() {
+                    Ok("direct") => {}
+                    Ok(_) => {
+                        server.mission_note(
+                            client,
+                            "Autopilot lands only straight onto a branch for now, and this repository lands through a PR (repos.json)",
+                        );
+                        return;
+                    }
+                    Err(e) => {
+                        server.mission_note(client, format!("Couldn't tell how it lands: {e}"));
+                        return;
+                    }
+                }
                 if notes.open.is_empty() && notes.rest.is_empty() {
                     server.mission_note(client, "No notes to work");
                     return;
@@ -217,13 +236,87 @@ impl Server {
                 };
                 server.autopilot_pick_note(client, repo, was, rest);
             }
-            Some(p) => server.autopilot_ask_counts(client, repo, p.value, was),
+            Some(p) => {
+                let note = p.value;
+                let at = repo.clone();
+                server.autopilot_pick_target(client, at, move |server, client, target| {
+                    server.autopilot_ask_counts(client, repo, note, target, was)
+                });
+            }
             None => {}
         });
     }
 
+    /// "Land on:": the repository's default branch first, so Enter keeps
+    /// landing there, then its local branches, read from git's files off
+    /// the task, then "Another branch…" to type one; `then` given the
+    /// branch, empty for the default one.
+    fn autopilot_pick_target(
+        &mut self,
+        client: ClientId,
+        repo: PathBuf,
+        then: impl FnOnce(&mut Server, ClientId, String) + Send + 'static,
+    ) {
+        self.off_task(
+            client,
+            move || {
+                let common = crate::tabs::git::locate(&repo).map(|p| p.common_dir);
+                common
+                    .map(|c| {
+                        (
+                            crate::tabs::git::default_branch(&c),
+                            crate::tabs::git::local_branches(&c),
+                        )
+                    })
+                    .unwrap_or_default()
+            },
+            move |server, client, (default, branches)| {
+                let items = mode::target_choices(default.as_deref(), &branches)
+                    .into_iter()
+                    .map(|(label, value)| PickItem::new(label, value))
+                    .collect();
+                let picker = Picker::new("Land on:", items)
+                    .named("branches")
+                    .prompt("branch> ");
+                server.pick(client, picker, move |server, client, picked| match picked {
+                    Some(p) if p.value == mode::ANOTHER_BRANCH => {
+                        let ask = Ask::new(
+                            "Land on which branch?",
+                            "A local branch, or one on origin, which is made a local branch tracking it.",
+                        );
+                        server.open(
+                            client,
+                            Box::new(ask),
+                            Some(Box::new(move |server: &mut Server, client, outcome| {
+                                let Outcome::Picked(p) = outcome else {
+                                    return;
+                                };
+                                match mode::typed_branch(&p.value) {
+                                    Some(b) => then(server, client, b),
+                                    None => server.mission_note(
+                                        client,
+                                        format!("Not a branch name: {}", p.value),
+                                    ),
+                                }
+                            })),
+                        );
+                    }
+                    Some(p) => then(server, client, p.value),
+                    None => {}
+                });
+            },
+        );
+    }
+
     /// The setup's slots and cap, each typed in starting from what it was.
-    fn autopilot_ask_counts(&mut self, client: ClientId, repo: PathBuf, note: String, was: Mode) {
+    fn autopilot_ask_counts(
+        &mut self,
+        client: ClientId,
+        repo: PathBuf,
+        note: String,
+        target: String,
+        was: Mode,
+    ) {
         let (slots_were, cap_was, limit_was) = (was.slots, was.cap, was.spend_limit);
         self.autopilot_number(
             client,
@@ -244,7 +337,13 @@ impl Server {
                             );
                             return;
                         }
-                        server.autopilot_ask_limit(client, repo, note, (slots, cap), limit_was);
+                        server.autopilot_ask_limit(
+                            client,
+                            repo,
+                            (note, target),
+                            (slots, cap),
+                            limit_was,
+                        );
                     },
                 );
             },
@@ -283,7 +382,7 @@ impl Server {
         &mut self,
         client: ClientId,
         repo: PathBuf,
-        note: String,
+        (note, target): (String, String),
         (slots, cap): (u32, u32),
         was: f64,
     ) {
@@ -313,7 +412,13 @@ impl Server {
                     client,
                     move || crate::notes::id::ensure_id(&file, &notes).ok(),
                     move |server, client, note_id| {
-                        server.autopilot_start(client, repo, note, (slots, cap, limit), note_id)
+                        server.autopilot_start(
+                            client,
+                            repo,
+                            (note, target),
+                            (slots, cap, limit),
+                            note_id,
+                        )
                     },
                 );
             })),
@@ -325,7 +430,7 @@ impl Server {
         &mut self,
         client: ClientId,
         repo: PathBuf,
-        note: String,
+        (note, target): (String, String),
         (slots, cap, limit): (u32, u32, f64),
         note_id: Option<String>,
     ) {
@@ -345,6 +450,7 @@ impl Server {
             m.slots = slots;
             m.cap = cap;
             m.spend_limit = limit;
+            m.target = target.clone();
         });
         match written {
             Ok(_) => {
@@ -353,14 +459,40 @@ impl Server {
                 self.mission_note(
                     client,
                     format!(
-                        "Working {}: {slots} at a time, up to {cap} tabs, in {}",
+                        "Working {}: {slots} at a time, up to {cap} tabs, in {}, landing on {}",
                         note_title(&note),
-                        paths::tilde(&repo)
+                        paths::tilde(&repo),
+                        if target.is_empty() {
+                            "the default branch"
+                        } else {
+                            &target
+                        }
                     ),
                 );
             }
             Err(e) => self.mission_note(client, format!("Couldn't save it: {e}")),
         }
+    }
+
+    /// Its menu's "Change the target branch…": "Land on:" asked again, for
+    /// the tabs it opens from now; those open land where they were cut from.
+    fn autopilot_change_target(&mut self, client: ClientId) {
+        let repo = Mode::read(&paths::state_dir()).repo;
+        self.autopilot_pick_target(client, repo, |server, client, target| {
+            let said = if target.is_empty() {
+                "Its new tabs land on the default branch".to_string()
+            } else {
+                format!("Its new tabs land on {target}")
+            };
+            match Mode::update(&paths::state_dir(), |m| m.target = target) {
+                Ok(_) => {
+                    server.autopilot.pilot.reset();
+                    server.autopilot_tick();
+                    server.mission_note(client, said);
+                }
+                Err(e) => server.mission_note(client, format!("Couldn't save it: {e}")),
+            }
+        });
     }
 
     // ── Its menu ────────────────────────────────────────────────────────────
@@ -400,6 +532,7 @@ impl Server {
                 };
                 self.autopilot_setup(client, &dir);
             }
+            Act::ChangeTarget => self.autopilot_change_target(client),
             Act::ToTabs => self.open_mission(client, Opening::Tabs),
             Act::Dismiss => {
                 self.autopilot_say("");
@@ -1036,7 +1169,8 @@ impl Server {
         let Some(client) = self.latest_client() else {
             return;
         };
-        let Some(tab) = self.open_item_tab(client, &mode.repo, &mode.note, &item) else {
+        let Some(tab) = self.open_item_tab(client, &mode.repo, &mode.note, &item, &mode.target)
+        else {
             return;
         };
         if let Some(t) = self.tabs.get_mut(&tab) {
