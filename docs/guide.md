@@ -262,6 +262,7 @@ Settings' "UX 2.0" (`ux2`, off by default) is a new look being built a part at a
 
 - takes the status line away;
 - gives each tab a header over its panes: its state, its name in bold in its color, and dimmed where it works and what Claude is doing, with how long (`waiting 4m`), so after `M-a` you see how long the tab has waited on you; under it, the keys of what the tab can show in Claude's place (`M-c` Claude, `M-d` Diff, `M-v` PR, `M-i` Ticket, `M-e` Note), the one it shows highlighted;
+- says in the header the branch after where the tab works (`~/code/app · main`), and at the right of its first line, dimmed, the tab `M-a` goes to next (`M-a next: 3 billing`) while another needs you; a click on a key in the header does what the key does, and with hover_highlight on the key under the mouse is lit;
 - shows the PR description (`M-v`) and the ticket (`M-i`) in Claude's place, as `M-d` shows the diff, rather than beside it, the same key, or `M-c`, putting Claude back;
 - starts the sidebar with how many tabs there are and `/ filter`, in place of the session's name and the counts, and its notifications under that, a line each, gone when there are none, in place of their section at the bottom;
 - ends each notification line with how long ago it came, dim at the right edge (`1m`, `12m`, `1h`), its title cut so the time always fits: the newest of its kind for Slack, the Linear inbox, notes written for you and landed tabs; a calendar change, the next meeting, the mode's word and a suggestion keep no time and show none;

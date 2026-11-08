@@ -243,7 +243,8 @@ impl Server {
         let Some(c) = self.clients.get_mut(&id) else {
             return;
         };
-        let motion = (!c.overlays.layers.is_empty() && c.overlays.look.hover) || sidebar;
+        let header = !c.header_keys.is_empty() && crate::settings::is_on("hover_highlight");
+        let motion = (!c.overlays.layers.is_empty() && c.overlays.look.hover) || sidebar || header;
         if motion != c.overlays.motion {
             c.overlays.motion = motion;
             let mode: &[u8] = if motion {
