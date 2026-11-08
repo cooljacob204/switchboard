@@ -921,6 +921,8 @@ fn board(
 /// dim count, each PR a rounded card of its number in the accent color and
 /// its checks' mark on the top edge, its title, then its repository, review
 /// and place in the queue dimmed; the chosen card's edge in the accent color.
+/// Its last line names the tab working on the PR, else its reviewers. On a
+/// screen `PR_SIDE_AT` wide, the chosen PR's description sits beside them.
 #[allow(clippy::too_many_arguments)]
 fn pr_cards(
     view: &View,
@@ -934,6 +936,14 @@ fn pr_cards(
     hits: &mut Vec<HitBox>,
 ) {
     const TALL: usize = 5;
+    let side_w = if cols >= PR_SIDE_AT { PR_SIDE_W } else { 0 };
+    let about = usize::try_from(m.cursor)
+        .ok()
+        .and_then(|c| view.data.items.get(c))
+        .filter(|_| side_w > 0)
+        .map(|item| pr_about(item, side_w, body, theme))
+        .unwrap_or_default();
+    let cols = cols - side_w;
     let col_w = (cols / columns.len().max(1)).max(12);
     let w = col_w - 1;
     let mut drawn: Vec<Vec<Vec<Span<'static>>>> = Vec::new();
@@ -1019,10 +1029,19 @@ fn pr_cards(
                     fg(theme.text)
                 },
             ));
-            out.push(side(
-                item.data["meta"].as_str().unwrap_or("").to_string(),
-                fg(theme.dim),
-            ));
+            let number = item.data["pr"]["number"].as_u64();
+            let tab = m
+                .snap
+                .tabs
+                .iter()
+                .find(|t| number.is_some() && t.pr == number);
+            let queued = item.group.as_deref() == Some("In merge queue");
+            let third = match (tab, item.data["reviewers"].as_str()) {
+                (Some(t), _) => format!("tab {}", t.index),
+                (None, Some(r)) if !queued && !r.is_empty() => r.to_string(),
+                _ => item.data["meta"].as_str().unwrap_or("").to_string(),
+            };
+            out.push(side(third, fg(theme.dim)));
             out.push(vec![
                 Span::styled(format!("╰{}╯", "─".repeat(w.saturating_sub(2))), edge),
                 Span::raw(" "),
@@ -1056,11 +1075,92 @@ fn pr_cards(
                     .unwrap_or_else(|| vec![Span::raw(" ".repeat(col_w))]),
             );
         }
-        lines.push(Line {
-            spans: fit(spans, cols, Style::new()),
-            fill: None,
-        });
+        let mut spans = fit(spans, cols, Style::new());
+        if side_w > 0 {
+            spans.push(Span::styled("│ ", fg(theme.faint)));
+            spans.extend(fit(
+                about.get(i).cloned().unwrap_or_default(),
+                side_w - 2,
+                Style::new(),
+            ));
+        }
+        lines.push(Line { spans, fill: None });
     }
+}
+
+/// How wide a screen shows the chosen PR's description beside the board,
+/// and how many columns it takes there.
+const PR_SIDE_AT: usize = 140;
+const PR_SIDE_W: usize = 50;
+
+/// The chosen PR's description, as the board draws it beside the columns:
+/// its number and title bold, a dim line of its author, commits, lines
+/// changed and checks, a rule, then its body as plain text wrapped to fit.
+fn pr_about(item: &Item, side_w: usize, body: usize, theme: &Theme) -> Vec<Vec<Span<'static>>> {
+    let inner = side_w.saturating_sub(3);
+    let d = &item.data;
+    let mut facts: Vec<String> = Vec::new();
+    if let Some(a) = d["author"].as_str().filter(|a| !a.is_empty()) {
+        facts.push(a.to_string());
+    }
+    if let Some(n) = d["commits"].as_u64() {
+        facts.push(format!("{n} commit{}", if n == 1 { "" } else { "s" }));
+    }
+    if let (Some(a), Some(r)) = (d["additions"].as_u64(), d["deletions"].as_u64()) {
+        facts.push(format!("+{a} −{r}"));
+    }
+    let (mark, color) = match d["checks"].as_str() {
+        Some("success") => ("✓", Badge::Done.color()),
+        Some("failure") => ("✕", Some(RED)),
+        Some("pending") => ("◌", Badge::Working.color()),
+        _ => ("", None),
+    };
+    let mut fact_line = vec![Span::styled(facts.join(" · "), fg(theme.dim))];
+    if !mark.is_empty() {
+        if !facts.is_empty() {
+            fact_line.push(Span::styled(" · ", fg(theme.dim)));
+        }
+        fact_line.push(Span::styled(mark, fg(color.unwrap_or(theme.dim))));
+        fact_line.push(Span::styled(" checks", fg(theme.dim)));
+    }
+    let mut out = vec![
+        vec![Span::styled(
+            text::cut(&item.title, inner),
+            bold(theme.text),
+        )],
+        fact_line,
+        vec![Span::styled("─".repeat(inner), fg(theme.faint))],
+    ];
+    let mut blank = true;
+    for raw in d["body"].as_str().unwrap_or("").lines() {
+        let line = raw.trim_end();
+        let heading = line.trim_start_matches('#');
+        let is_heading = heading.len() < line.len() && heading.starts_with(' ');
+        if line.trim().is_empty() {
+            if !blank {
+                out.push(Vec::new());
+            }
+            blank = true;
+            continue;
+        }
+        if is_heading && !blank {
+            out.push(Vec::new());
+        }
+        blank = false;
+        let style = if is_heading {
+            bold(theme.text)
+        } else {
+            fg(theme.text)
+        };
+        for w in text::wrap(if is_heading { heading.trim() } else { line }, inner) {
+            out.push(vec![Span::styled(w, style)]);
+        }
+        if out.len() >= body {
+            break;
+        }
+    }
+    out.truncate(body);
+    out
 }
 
 /// When an item happened, shortly, for the column at a row's end; nothing
@@ -2436,6 +2536,63 @@ mod tests {
         let edge = lines[8].spans.iter().find(|s| s.content == "╭").unwrap();
         assert_eq!(edge.style.fg, Some(ACCENT), "the chosen card's edge");
         assert!(hits.iter().any(|h| h.spot == Spot::Index(1) && h.y == 9));
+    }
+
+    #[test]
+    fn with_ux2_the_pr_board_names_reviewers_or_the_tab_and_shows_the_chosen_pr_beside_it() {
+        let item = |n: u32, column: &str, reviewers: &str| {
+            Item::new(n.to_string(), format!("#{n} PR {n}"))
+                .group(column)
+                .data(serde_json::json!({
+                    "pr": { "number": n }, "checks": "success", "meta": "w",
+                    "reviewers": reviewers, "author": "ana", "commits": 3,
+                    "additions": 214, "deletions": 88,
+                    "body": "## Summary\nLay the Settings view out in two columns.",
+                }))
+        };
+        let items = vec![
+            item(1, "In review", "sam, ben"),
+            item(2, "Changes asked", "ben"),
+        ];
+        let mut working = tab(3, "settings");
+        working.pr = Some(1);
+        let mut m = mission(vec![working], vec![list_view(ViewId::Prs, "PRs", items)]);
+        m.snap.rules.ux2 = true;
+        m.view = 1;
+        m.cursor = 1;
+        let columns = crate::sources::prboard::columns(true);
+        let mut lines = Vec::new();
+        let mut hits = Vec::new();
+        let view = &m.snap.views[0];
+        pr_cards(
+            view,
+            columns,
+            160,
+            20,
+            &m,
+            &Theme::DARK,
+            0,
+            &mut lines,
+            &mut hits,
+        );
+        let text = texts(&lines);
+        assert!(text[0].contains("Changes asked 1"), "{}", text[0]);
+        assert!(text[4].contains("│ tab 3"), "{}", text[4]);
+        assert!(text[4].contains("│ ben"), "the reviewers: {}", text[4]);
+        assert!(text[0].contains("│ #2 PR 2"), "{}", text[0]);
+        assert!(
+            text[1].contains("ana · 3 commits · +214 −88 · ✓ checks"),
+            "{}",
+            text[1]
+        );
+        assert!(text[3].contains("│ Summary") && text[4].contains("Lay the Settings"));
+        let (narrow, _) = {
+            let mut l = Vec::new();
+            let mut h = Vec::new();
+            pr_cards(view, columns, 120, 20, &m, &Theme::DARK, 0, &mut l, &mut h);
+            (texts(&l), h)
+        };
+        assert!(!narrow[0].contains("#2 PR 2"), "{}", narrow[0]);
     }
 
     #[test]

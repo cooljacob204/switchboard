@@ -71,7 +71,9 @@ impl View {
     /// A board's columns, in their order (the PR and ticket boards).
     pub fn columns(&self) -> Option<&'static [&'static str]> {
         match self.id {
-            ViewId::Prs => Some(&crate::sources::prboard::COLUMNS),
+            ViewId::Prs => Some(crate::sources::prboard::columns(crate::settings::is_on(
+                "ux2",
+            ))),
             ViewId::Tickets => Some(&crate::sources::tickets::COLUMNS),
             _ => None,
         }
