@@ -222,6 +222,9 @@ pub struct Rules {
     pub now_ms: i64,
     pub reminders: bool,
     pub build_failing: bool,
+    /// UX 2.0: the sidebar opens with its tab count and the notifications,
+    /// in place of the session's name with them pinned at the bottom.
+    pub ux2: bool,
 }
 
 impl Rules {
@@ -231,6 +234,7 @@ impl Rules {
             now_ms: crate::util::now_ms(),
             reminders: crate::settings::is_on("reminders"),
             build_failing: crate::settings::is_on("build_failing"),
+            ux2: crate::settings::is_on("ux2"),
         }
     }
 
@@ -998,6 +1002,7 @@ pub(crate) mod tests {
             now_ms: NOW_MS,
             reminders: true,
             build_failing: true,
+            ux2: false,
         }
     }
 

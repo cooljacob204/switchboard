@@ -132,6 +132,7 @@ impl Default for Snapshot {
                 now_ms: 0,
                 reminders: true,
                 build_failing: true,
+                ux2: false,
             },
             theme: Theme::DARK,
             card: (56, 13),

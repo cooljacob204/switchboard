@@ -45,6 +45,13 @@
     "default": "look"
   },
   {
+    "key": "ux2",
+    "category": "Appearance",
+    "label": "UX 2.0",
+    "description": "No status line: each tab has a header naming it, with the keys of what it can show in Claude's place (M-c Claude, M-d Diff, M-v PR, M-i Ticket, M-e Note); the sidebar starts with its notifications; and M-v and M-i show the PR and the ticket in Claude's place rather than beside it. Off, the status line, the sidebar and those keys are as before",
+    "default": false
+  },
+  {
     "key": "sidebar",
     "category": "Sidebar",
     "label": "Sidebar",

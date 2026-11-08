@@ -179,14 +179,17 @@ pub struct Session {
 
 impl Session {
     /// The area panes are laid out in: all but the status line (its one or
-    /// two rows, src/status) and the sidebar.
+    /// two rows, src/status), the sidebar, and with UX 2.0 the tab's header
+    /// at the top (src/mux/header.rs).
     pub fn main_area(&self) -> Rect {
         let side = self.sidebar.min(self.cols.saturating_sub(1));
+        let below = crate::status::lines();
+        let top = crate::status::top().min(self.rows.saturating_sub(below + 1));
         Rect::new(
             side,
-            0,
+            top,
             self.cols.saturating_sub(side).max(1),
-            self.rows.saturating_sub(crate::status::lines()).max(1),
+            self.rows.saturating_sub(below + top).max(1),
         )
     }
 
@@ -2987,10 +2990,30 @@ impl Server {
                 );
             }
         }
+        // UX 2.0's header over the tab's panes (src/mux/header.rs); a
+        // zoomed pane covers it, as it covers the sidebar.
+        let top = crate::status::top();
+        let header_at = self
+            .tabs
+            .get(&s.current)
+            .filter(|t| top > 0 && !t.zoomed)
+            .map(|_| {
+                let main = s.main_area();
+                Rect::new(main.x, 0, main.width, top).intersection(frame.area())
+            });
+        if let Some(area) = header_at {
+            let header = self.tab_header(s.current);
+            super::header::draw(&mut frame.buf, area, &header, palette);
+        }
         let side = self.sidebar_draw(&mut frame.buf, s, c.id);
         let hits = self.draw_status_rows(frame, s);
-        let status = Rect::new(0, rows.saturating_sub(crate::status::lines()), cols, 1);
-        if c.prefix {
+        // The prefix's mark at the status line's right end, or with none
+        // (UX 2.0), at the header's.
+        let status = match header_at {
+            Some(area) if crate::status::lines() == 0 => Rect::new(area.x, 0, area.width, 1),
+            _ => Rect::new(0, rows.saturating_sub(crate::status::lines()), cols, 1),
+        };
+        if c.prefix && status.y < rows {
             compose::put(
                 &mut frame.buf,
                 cols.saturating_sub(3),
@@ -3003,6 +3026,30 @@ impl Server {
         }
         frame.cursor = cursor;
         (hits, side)
+    }
+}
+
+impl Server {
+    /// What UX 2.0's header says about a tab (src/mux/header.rs), from what
+    /// the server holds: its label, color and directory, its Claude's
+    /// state, and what its focused pane shows.
+    pub fn tab_header(&self, tab: TabId) -> super::header::Header {
+        let shown = self
+            .tabs
+            .get(&tab)
+            .and_then(|t| self.panes.get(&t.active))
+            .map(|slot| super::header::Shown::of_pane(|k| slot.opts.get(k).cloned()))
+            .unwrap_or(super::header::Shown::Claude);
+        super::header::Header {
+            name: self.tab_label(tab),
+            path: self
+                .tab_path(tab)
+                .map(crate::paths::tilde)
+                .unwrap_or_default(),
+            state: self.tab_agent(tab),
+            color: self.tab_color(tab).map(Into::into),
+            shown,
+        }
     }
 }
 

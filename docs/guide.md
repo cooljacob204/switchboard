@@ -256,6 +256,17 @@ Settings' "Health light" (`health_light`) turns it off.
 
 Settings' "Second status line" (`second_status`, off by default) adds a line under the tabs about the current tab: its name in full, where the tab may cut it short, its PR and whether it has every commit made here ("↑2 to push" in yellow, the commits on the branch that its upstream, or origin's copy of it, hasn't got as last fetched or pushed; "pushed" when it has them all), the program in front of its pane, and in a Claude pane, what the session is doing ("waiting on you for 4m", "finished 2m ago", "working"), its name and your last prompt to it.
 
+### UX 2.0
+
+Settings' "UX 2.0" (`ux2`, off by default) is a new look being built a part at a time. Today it:
+
+- takes the status line away;
+- gives each tab a header over its panes: its state, its name in bold in its color, and dimmed where it works and what Claude is doing; under it, the keys of what the tab can show in Claude's place (`M-c` Claude, `M-d` Diff, `M-v` PR, `M-i` Ticket, `M-e` Note), the one it shows highlighted;
+- shows the PR description (`M-v`) and the ticket (`M-i`) in Claude's place, as `M-d` shows the diff, rather than beside it, the same key putting Claude back;
+- starts the sidebar with how many tabs there are, in place of the session's name, and its notifications under that, a line each, gone when there are none, in place of their section at the bottom.
+
+A pane zoomed with `M-=` covers the header, as it covers the sidebar. With `ux2` off, the status line, the sidebar and those keys are as before.
+
 ### Theme
 
 Settings' "Theme" (`theme`) draws the status line, the lines between panes, the panes without the focus and every box dark or light; `system` follows your terminal's background, which the workspace asks each terminal for as it attaches, and stays dark when the terminal doesn't answer. `M-p`'s "Toggle light and dark theme" switches between the two. The programs in your panes keep your terminal's own colors either way. The diff and Notes follow the setting too, `system` by the background your terminal said.

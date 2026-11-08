@@ -346,6 +346,8 @@ pub fn sidebar_lines(
     let here = tabs.iter().find(|t| t.id == view.here);
 
     // The session's name in a pill of its tab's color, and the counts.
+    // With UX 2.0, which has no sessions to tell apart, how many tabs
+    // there are in its place.
     let mut pill_row = Row::default();
     let pill = match here.and_then(|t| t.color) {
         Some(c) => Style::new()
@@ -357,10 +359,21 @@ pub fn sidebar_lines(
             .fg(theme.bright)
             .add_modifier(Modifier::BOLD),
     };
-    pill_row
-        .put(" ", Style::new())
-        .put(format!(" {session} "), pill)
-        .put("  ", Style::new());
+    if r.ux2 {
+        let n = tabs.len();
+        pill_row
+            .put(" ", Style::new())
+            .put(
+                format!("{n} {}", if n == 1 { "tab" } else { "tabs" }),
+                fg(theme.dim),
+            )
+            .put("  ", Style::new());
+    } else {
+        pill_row
+            .put(" ", Style::new())
+            .put(format!(" {session} "), pill)
+            .put("  ", Style::new());
+    }
     counts(&mut pill_row, tabs, r, theme);
     head.push(pill_row.fit(cols, None));
     // A / filter being typed, or kept, in the line under it.
@@ -573,7 +586,37 @@ pub fn sidebar_lines(
     // heading, so they read as no tab and never scroll away.
     let mut notice_lines: Vec<Line> = Vec::new();
     let mut notice_owners: Vec<Option<Owner>> = Vec::new();
-    if !notices.is_empty() {
+    // With UX 2.0 they open the sidebar instead, under the header, a line
+    // each, and are gone when there are none; they never scroll away
+    // either.
+    let mut top_owners: Vec<Option<Owner>> = Vec::new();
+    if r.ux2 && !notices.is_empty() {
+        let mut heading = Row::default();
+        heading
+            .put(" ", Style::new())
+            .put("NOTIFICATIONS", bold(YELLOW))
+            .put(format!(" {}", notices.len()), fg(theme.faint));
+        head.push(heading.fit(cols, None));
+        top_owners.push(None);
+        for n in notices {
+            let fill = if view.focused && view.cursor.is_some_and(|c| c.same_row(&n.owner)) {
+                Some(theme.highlight)
+            } else if view.hover == Some(&n.owner) {
+                Some(theme.panel)
+            } else {
+                None
+            };
+            let mut row = Row::default();
+            row.put(if fill.is_some() { "▌" } else { " " }, fg(YELLOW))
+                .put("●", fg(YELLOW))
+                .put(" ", Style::new())
+                .put(n.title.clone(), fg(theme.text));
+            head.push(row.fit(cols, fill));
+            top_owners.push(Some(n.owner.clone()));
+        }
+        head.push(Line::blank(cols));
+        top_owners.push(None);
+    } else if !notices.is_empty() {
         notice_lines.push(Line::blank(cols));
         let mut rule = Row::default();
         rule.put(" ", Style::new())
@@ -670,7 +713,8 @@ pub fn sidebar_lines(
         row.put(" ", Style::new()).put(said, fg(theme.faint));
         row.fit(cols, fill)
     };
-    let mut head_owners: Vec<Option<Owner>> = vec![None; head.len()];
+    let mut head_owners: Vec<Option<Owner>> = vec![None; head.len() - top_owners.len()];
+    head_owners.extend(top_owners);
     if top > 0 && view.filter.is_none() {
         // A tab cut at the top counts as above.
         head[1] = more("▲", &Owner::ScrollUp, tabs_in(0, top).len());
@@ -962,6 +1006,62 @@ mod tests {
             &Theme::DARK,
         );
         assert!(texts(&turned).join("\n").contains(" ⠙  6 review"));
+    }
+
+    #[test]
+    fn with_ux2_the_tab_count_and_the_notifications_open_the_sidebar() {
+        let t = tab(1, "work", TabState::Idle);
+        let notice = Notice {
+            owner: Owner::Notice {
+                source: "slack".into(),
+                id: "n1".into(),
+            },
+            title: "3 new on Slack".into(),
+            detail: "Ada · #general".into(),
+        };
+        let r = Rules {
+            ux2: true,
+            ..rules()
+        };
+        let out = sidebar_lines(
+            std::slice::from_ref(&t),
+            None,
+            std::slice::from_ref(&notice),
+            &[],
+            "s",
+            40,
+            20,
+            &view(1),
+            &r,
+            &Theme::DARK,
+        );
+        assert_eq!(out.lines.len(), 20);
+        let text = texts(&out);
+        assert!(text[0].starts_with(" 1 tab"), "{:?}", text[0]);
+        assert!(!text[0].contains(" s "), "no session's name: {:?}", text[0]);
+        assert_eq!(text[2], " NOTIFICATIONS 1");
+        assert_eq!(text[3], " ● 3 new on Slack");
+        assert_eq!(out.owners[3], Some(notice.owner.clone()));
+        assert_eq!(text[4], "");
+        assert!(text[5..].iter().any(|l| l.contains("work")));
+        assert!(
+            !text.iter().any(|l| l.contains("═")),
+            "none pinned at the bottom"
+        );
+        // None, none shown.
+        let none = sidebar_lines(
+            std::slice::from_ref(&t),
+            None,
+            &[],
+            &[],
+            "s",
+            40,
+            20,
+            &view(1),
+            &r,
+            &Theme::DARK,
+        );
+        assert!(!texts(&none).iter().any(|l| l.contains("NOTIFICATIONS")));
     }
 
     #[test]

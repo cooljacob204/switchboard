@@ -32,6 +32,7 @@ pub mod client;
 pub mod commands;
 pub mod compose;
 pub mod extkeys;
+pub mod header;
 pub mod input;
 pub mod keys;
 pub mod layout;
