@@ -19,7 +19,7 @@ use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Span;
 
-use super::model::{self, Group, Rules, TabModel, TabState};
+use super::model::{self, Rules, Stage, TabModel, TabState};
 use super::text::{self, Badge, SPINNER, width};
 use crate::items::{Item, State};
 use crate::mux::TabId;
@@ -255,24 +255,14 @@ fn fg(c: Color) -> Style {
     Style::new().fg(c)
 }
 
-/// A group's heading color with UX 2.0: the color of the badge its tabs
-/// wear, so what needs you reads yellow and what works blue; the quiet
-/// groups dim.
-fn ux2_group_color(group: Group, theme: &Theme) -> Color {
-    let badge = match group {
-        Group::Needs => Badge::Waiting,
-        Group::Failing => Badge::Failing,
-        Group::Working => Badge::Working,
-        Group::Monitoring => Badge::Monitor,
-        Group::Queued => Badge::Queued,
-        Group::Landing => Badge::Landing,
-        Group::Deploy => Badge::Deploy,
-        Group::Merged => Badge::Merged,
-        Group::Loops => Badge::Scheduled,
-        Group::Later => Badge::Later,
-        Group::Idle | Group::Other => return theme.dim,
-    };
-    badge.color().unwrap_or(theme.dim)
+/// A group's heading color with UX 2.0: the color of the badge its stage
+/// wears in mission control, so what needs you reads yellow and what works
+/// blue; the quiet groups dim.
+fn ux2_group_color(stage: Stage, theme: &Theme) -> Color {
+    match stage {
+        Stage::Idle | Stage::Other => theme.dim,
+        _ => stage.color().color().unwrap_or(theme.dim),
+    }
 }
 
 /// An item's mark by its state, as mission control's lists draw it.
@@ -427,21 +417,21 @@ pub fn sidebar_lines(
         if r.ux2 {
             // UX 2.0: the heading in its group's color, bold, its count at
             // the right edge.
-            let title = group.group.title().to_uppercase();
+            let title = group.stage.title().to_uppercase();
             let n = group.tabs.len().to_string();
-            let color = ux2_group_color(group.group, theme);
+            let color = ux2_group_color(group.stage, theme);
             heading.put(title.clone(), bold(color));
             let gap = cols.saturating_sub(width(&title) + width(&n) + 2);
             heading
                 .put(" ".repeat(gap.max(1)), Style::new())
                 .put(n, fg(color));
-        } else if group.group == Group::Failing {
+        } else if group.stage == Stage::Failing {
             heading.put(
-                format!("✗ {}", group.group.title().to_uppercase()),
+                format!("✗ {}", group.stage.title().to_uppercase()),
                 bold(Color::Indexed(160)),
             );
         } else {
-            heading.put(group.group.title().to_uppercase(), fg(theme.dim));
+            heading.put(group.stage.title().to_uppercase(), fg(theme.dim));
         }
         if !r.ux2 {
             heading.put(format!(" {}", group.tabs.len()), fg(theme.faint));
@@ -1021,6 +1011,20 @@ mod tests {
         assert_eq!(out.owners[4], None);
         assert_eq!(out.owners[3], Some(Owner::Tab(TabId(1))));
         assert_eq!(out.owners[5], Some(Owner::Tab(TabId(2))));
+    }
+
+    #[test]
+    fn a_tab_under_queue_and_clean_is_under_its_heading() {
+        let mut landing = tab(1, "landing", TabState::Working);
+        landing.loop_skill = Some("queue".into());
+        let tabs = vec![landing, tab(2, "busy", TabState::Working)];
+        let out = lines(&tabs, 30, 14, &view(1));
+        let text: Vec<String> = out.lines.iter().map(Line::text).collect();
+        let at = |heading: &str| text.iter().position(|l| l.starts_with(heading));
+        let queue = at(" QUEUE-AND-CLEAN 1").expect("a Queue-and-clean heading");
+        let working = at(" WORKING 1").expect("a Working heading");
+        assert!(working < queue, "{text:?}");
+        assert_eq!(out.owners[queue + 1], Some(Owner::Tab(TabId(1))));
     }
 
     #[test]

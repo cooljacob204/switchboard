@@ -254,7 +254,7 @@ pub fn grid(tabs: &[TabModel], r: &Rules, cols: usize, card: usize) -> Grid {
     let card = card.max(1);
     let fit = (cols.saturating_sub(BORDER) / card).max(1);
     let mut used = 0;
-    for staged in model::staged(tabs, r) {
+    for staged in model::grouped(tabs, None, r) {
         let n = staged.tabs.len();
         let room = if shelves.is_empty() {
             0

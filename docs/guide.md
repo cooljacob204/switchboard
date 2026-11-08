@@ -366,24 +366,27 @@ On a screen too short for every tab, the session's line at the top and the notif
 
 ### Groups
 
-Each tab is in one group, and the groups come in this order:
+Each tab is in one group, the same as its stage in mission control's Tabs view, and the groups come in this order:
 
 | Group | What puts a tab there |
 | --- | --- |
 | Needs you | Its Claude waits on you or has finished there, you pinned it, or its reminder came due. Pinned tabs and reminders come first, then waiting tabs, the longest-waiting first, then finished ones, the oldest first. |
-| Build failing | Its open pull request has a failing check and isn't in a merge queue. The heading is in red. |
-| Working | Claude is working, or its turn ended with background tasks still running, which Claude carries on from when they end. |
+| Build failing | Its open pull request has a failing check and isn't in a merge queue, and no `/ci-loop` is at work on it. The heading is in red. |
+| Working | Claude is working, or its turn ended with background tasks still running, which Claude carries on from when they end, with none of the loops below. |
 | Monitoring | Claude's only background work is `Monitor` watches, each named ("monitoring · CI on #12"). |
+| Review loop | Its Claude works under `/review-loop`, from the moment you ask for it and between its rounds, or the loop runs in the background. |
+| CI loop | The same for `/ci-loop`, a failing build's included. |
+| Queue-and-clean | The same for `/queue-and-clean`, until its pull request is queued, landing or merged. |
+| Loops | A `/loop` between its ticks: a self-paced one while the wakeup its last tick scheduled is pending, and for five minutes after it is due; one on a timer (`/loop 5m …`, or a cron job Claude created) until Claude deletes the job, the session ends, or seven days pass. |
 | In merge queue | Its pull request is in the merge queue, in queue order, with Settings' "Show the landing queue" off. |
 | Landing | It holds or waits for the landing lock of `/queue-and-clean`'s "Land on the default branch", in the landing queue's order, or its pull request is in the merge queue ("merging" at its head, else "2nd in line to merge"). |
 | Testing Deploy | Its pull request merged and the tab is still at work on it: `/deploy-test` waiting for the deploy or recording its test, or Claude working under `/deploy-test` or the `/queue-and-clean` that follows the merge. |
 | Merged | Its pull request merged. |
 | Idle | A Claude session with nothing to do. |
-| Loops | A `/loop` between its ticks: a self-paced one while the wakeup its last tick scheduled is pending, and for five minutes after it is due; one on a timer (`/loop 5m …`, or a cron job Claude created) until Claude deletes the job, the session ends, or seven days pass. |
 | Reminders | A reminder still to come, while nothing else places the tab. |
 | Other | No Claude in it: Notes, the Slack relay, a shell. |
 
-Needs you always wins: a tab whose Claude waits on you stays there even while its pull request is queued. After it, the landing queue and the pull request's place win over what Claude is doing, so a tab whose PR is queued stays under Landing while `/queue-and-clean` watches it; then a failing build; then the work running; then a reminder still to come. A tab's pull request, its checks and whether it is queued or merged come from one GitHub query for every tab's PR (see "How often mission control looks"), so a group can lag GitHub by that long. A tab whose worktree has been removed, as `/queue-and-clean` leaves it once its PR merges, is found by the worktree's branch and keeps its PR.
+Needs you always wins: a tab whose Claude waits on you stays there even while its pull request is queued. After it, the landing queue and the pull request's place win over what Claude is doing, so a tab whose PR is queued stays under Landing while `/queue-and-clean` watches it; then a failing build, unless `/ci-loop` is at work on it; then the loop running; then the work running; then a reminder still to come. A tab's pull request, its checks and whether it is queued or merged come from one GitHub query for every tab's PR (see "How often mission control looks"), so a group can lag GitHub by that long. A tab whose worktree has been removed, as `/queue-and-clean` leaves it once its PR merges, is found by the worktree's branch and keeps its PR.
 
 Settings' "Build failing" (`build_failing`) off leaves such tabs in Working or Idle, the failing count still in their words. Settings' "Show the landing queue" (`landing_queue`) off leaves landing tabs where their work puts them, and a tab whose PR is queued under In merge queue; the queue still orders the landings.
 
@@ -496,7 +499,7 @@ A peek shows a tab without going there, in a box over most of the screen: its la
 
 ### The cards
 
-The cards are grouped in stages, finer than the sidebar's groups: Needs you, Build failing, Working, Monitoring, Review loop, CI loop, Queue-and-clean, Loops, In merge queue, Landing, Testing Deploy, Merged, Idle, Reminders, then Other. A tab running a loop is in that loop's stage, from the moment you ask for it, while Claude works between its rounds too; a tab whose pull request is in the merge queue, landing or merged is in that stage even while it runs a loop; and a tab with a failing build that runs `/ci-loop` stays under CI loop while the loop is at work. Each stage is a box in the stage's color, titled on its top edge, packed side by side so the screen fills: a stage that doesn't fit in the room left on a row starts the next, and one too big for a row takes several rows of cards. While a note is worked continuously, a line above the cards says so ("Autopilot", under Worktrees).
+The cards are grouped in stages, the sidebar's groups: Needs you, Build failing, Working, Monitoring, Review loop, CI loop, Queue-and-clean, Loops, In merge queue, Landing, Testing Deploy, Merged, Idle, Reminders, then Other. A tab running a loop is in that loop's stage, from the moment you ask for it, while Claude works between its rounds too; a tab whose pull request is in the merge queue, landing or merged is in that stage even while it runs a loop; and a tab with a failing build that runs `/ci-loop` stays under CI loop while the loop is at work. Each stage is a box in the stage's color, titled on its top edge, packed side by side so the screen fills: a stage that doesn't fit in the room left on a row starts the next, and one too big for a row takes several rows of cards. While a note is worked continuously, a line above the cards says so ("Autopilot", under Worktrees).
 
 A card's top edge carries the tab's badge, number and name. Inside are what it is doing, its pull request's number, checks, review and size ("#12 · ✓12 ✗1 ⏳3 · approved · +340 −80"), and the session's name; then your last prompt, the end of Claude's last reply, and, when it waits on a permission prompt or a question, what it is asking. A tab with no Claude shows its directory.
 
