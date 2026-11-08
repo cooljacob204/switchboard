@@ -397,7 +397,9 @@ pub fn unclaimed(repo: &Path, note: &str, text: &str) -> Vec<Item> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Plan {
     /// Its `Plan: [[<name>]]` links a plan note with no "## Decision
-    /// needed", the heading plans mark an open choice with.
+    /// needed", the heading plans mark an open choice with, or one whose
+    /// choice was made: each such section has a ticked option or a
+    /// `Chose …` line, or the item says `(chose …)`.
     Settled,
     /// The plan note has an open choice.
     Choice,
@@ -406,7 +408,40 @@ pub enum Plan {
 }
 
 static DECISION: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?im)^#+[ \t]+decisions?[ \t]+needed").unwrap());
+    LazyLock::new(|| Regex::new(r"(?i)^#+[ \t]+decisions?[ \t]+needed").unwrap());
+// A choice made: a ticked option at the section's top level (a ticked task
+// nested under an option doesn't choose it), or the plans' own "Chose A." line.
+static MADE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)^(?:[-*+]\s+\[x\]|\s*(?:[-*+]\s+)?chose\b)").unwrap());
+// An item that says what was chosen: "(chose B)".
+static CHOSE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)\(chose\b").unwrap());
+
+/// Whether a plan note leaves a choice open: a "## Decision needed"
+/// section (up to the next heading of its level or above, its subheadings
+/// in it) with no ticked option and no `Chose …` line. The heading is often
+/// left in place once the choice is made, so the heading alone doesn't say
+/// it is open.
+fn open_choice(plan: &str) -> bool {
+    let mut open = false;
+    // The level of the decision section the lines are in, if any.
+    let mut decision: Option<usize> = None;
+    for line in plan.lines() {
+        if let Some(m) = HEADING.captures(line) {
+            let level = m[1].len();
+            if decision.is_some_and(|d| level > d) {
+                continue;
+            }
+            if open {
+                return true;
+            }
+            decision = DECISION.is_match(line).then_some(level);
+            open = decision.is_some();
+        } else if decision.is_some() && MADE.is_match(line) {
+            open = false;
+        }
+    }
+    open
+}
 
 /// How settled an item's plan is, from the item whole.
 pub fn plan_of(notes: &Path, item: &str) -> Plan {
@@ -417,7 +452,7 @@ pub fn plan_of(notes: &Path, item: &str) -> Plan {
         return Plan::None;
     };
     match fs::read_to_string(file) {
-        Ok(text) if DECISION.is_match(&text) => Plan::Choice,
+        Ok(text) if open_choice(&text) && !CHOSE.is_match(item) => Plan::Choice,
         Ok(_) => Plan::Settled,
         Err(_) => Plan::None,
     }
@@ -863,6 +898,110 @@ pub fn skip_from(text: &str) -> HashSet<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_decision_section_with_its_choice_made_counts_as_settled() {
+        let dir = std::env::temp_dir().join(format!("sb-settled-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join("Plans")).unwrap();
+        let plans = [
+            (
+                "Ticked",
+                "## Decision needed\n\n- [ ] A\n- [x] B\n\n## Steps\n",
+            ),
+            ("Chose", "## Decisions needed\n\nA or B.\n\nChose B.\n"),
+            (
+                "Nested",
+                "## Decision needed\n\n### Options\n\n- [ ] A\n- [x] B\n\n## Steps\n",
+            ),
+            (
+                "Open",
+                "## Decision needed\n\n- [ ] A\n  - [x] Check it builds\n- [ ] B\n\n## Steps\n\n- [x] done\n",
+            ),
+            ("Picked", "## Decision needed\n\n- [ ] A\n- [ ] B\n"),
+            ("Asking", "## Decision needed\n\n- [x] A\n- [ ] B\n"),
+            (
+                "Second",
+                "## Decision needed\n\n- [x] A\n\n## Decision needed\n\n- [ ] C\n",
+            ),
+        ];
+        for (name, body) in plans {
+            fs::write(
+                dir.join(format!("Plans/Plan - {name}.md")),
+                format!("# Plan - {name}\n\n{body}"),
+            )
+            .unwrap();
+        }
+        let item =
+            |name: &str, after: &str| format!("- [ ] {name}\n  Plan: [[Plan - {name}]]{after}\n");
+        assert_eq!(
+            plan_of(&dir, &item("Ticked", "")),
+            Plan::Settled,
+            "a ticked option"
+        );
+        assert_eq!(
+            plan_of(&dir, &item("Chose", "")),
+            Plan::Settled,
+            "a Chose line"
+        );
+        assert_eq!(
+            plan_of(&dir, &item("Nested", "")),
+            Plan::Settled,
+            "a ticked option under a subheading of the section"
+        );
+        assert_eq!(
+            plan_of(&dir, &item("Open", "")),
+            Plan::Choice,
+            "only unticked options, a ticked task under one or a ticked step elsewhere not counting"
+        );
+        assert_eq!(
+            plan_of(&dir, &item("Picked", " (chose B)")),
+            Plan::Settled,
+            "the item saying what was chosen"
+        );
+        assert_eq!(
+            plan_of(&dir, &item("Second", "")),
+            Plan::Choice,
+            "a second decision still open"
+        );
+
+        fs::write(
+            dir.join("Work.md"),
+            [
+                "# Work",
+                "",
+                "- [ ] Open",
+                "  Plan: [[Plan - Open]]",
+                "- [ ] Asking",
+                "  Plan: [[Plan - Asking]] (needs a choice: A or B)",
+                "- [ ] Picked",
+                "  Plan: [[Plan - Picked]] (chose B)",
+                "- [ ] Ticked",
+                "  Plan: [[Plan - Ticked]]",
+                "",
+            ]
+            .join("\n"),
+        )
+        .unwrap();
+        let taken: Vec<String> = queue(
+            &dir,
+            &dir,
+            "Work.md",
+            &HashSet::new(),
+            true,
+            &dir.join("claims.tsv"),
+        )
+        .unwrap()
+        .into_iter()
+        .map(|i| i.text)
+        .collect();
+        assert_eq!(
+            taken,
+            vec!["Picked", "Ticked"],
+            "an item still saying it needs a choice never taken, whatever its plan says"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn an_item_wtn_started_in_the_last_half_hour_counts_as_taken() {
