@@ -306,9 +306,9 @@ impl Server {
         }
     }
 
-    /// Each tab's screen for UX 2.0's cards: the last lines of its Claude's
-    /// pane (else its active one), from the pane's grid in memory, and the
-    /// branch its directory was last named on.
+    /// Each tab's screen for UX 2.0's cards: the lines of its Claude's pane
+    /// (else its active one) in the pane's own colors, from its emulator in
+    /// memory, and the branch its directory was last named on.
     fn mission_screens(&self) -> std::collections::HashMap<TabId, super::Screen> {
         self.tabs
             .iter()
@@ -319,16 +319,15 @@ impl Server {
                     .iter()
                     .find(|(p, r)| r.claude && tab.layout.panes().contains(p))
                     .map_or(tab.active, |(p, _)| *p);
-                let text = self
+                let lines = self
                     .panes
                     .get(&pane)
-                    .map(|slot| slot.pane.text(0))
+                    .map(|slot| slot.pane.styled_lines())
                     .unwrap_or_default();
                 let branch = self
                     .tab_path(id)
                     .and_then(|p| self.tab_names.names.branch(p))
                     .map(str::to_string);
-                let lines = text.lines().map(str::to_string).collect();
                 (id, super::Screen { lines, branch })
             })
             .collect()

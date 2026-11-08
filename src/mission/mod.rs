@@ -150,11 +150,11 @@ impl Default for Snapshot {
     }
 }
 
-/// What a UX 2.0 card shows of a tab's pane: its screen's last lines, as
-/// text, and the branch its directory is on.
+/// What a UX 2.0 card shows of a tab's pane: its screen's lines in the
+/// pane's own colors, and the branch its directory is on.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Screen {
-    pub lines: Vec<String>,
+    pub lines: Vec<Vec<ratatui::text::Span<'static>>>,
     pub branch: Option<String>,
 }
 
