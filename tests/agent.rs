@@ -781,7 +781,7 @@ fn context_in(server: &TestServer, pane: &str) -> String {
 #[test]
 fn a_session_starting_in_a_tab_with_a_note_is_pointed_at_it() {
     let server = TestServer::start();
-    settings(&server, json!({}));
+    settings(&server, json!({"tab_note_context": true}));
     let mut client = server.attach(100, 30);
     client.wait_text("$");
     let (pane, _) = first_pane(&server);
@@ -811,7 +811,7 @@ fn a_session_starting_in_a_tab_with_a_note_is_pointed_at_it() {
     server.ok(&["set", "-t", &tab, "@tab_note", "../Gone.md"]);
     assert!(context_in(&server, &pane).contains(&pointed(Path::new("Last.md"))));
 
-    // The setting off: the part alone.
-    settings(&server, json!({"tab_note_context": false}));
+    // The setting off, as it is by default: the part alone.
+    settings(&server, json!({}));
     assert!(!context_in(&server, &pane).contains("This tab's note"));
 }

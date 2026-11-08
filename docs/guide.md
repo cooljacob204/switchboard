@@ -1924,7 +1924,7 @@ Mission control's Settings view (`M-p`, then "Settings: turn the workspace's opt
 | Notes beside a note's tab (`note_tab_beside`) | on | Opening a note's tab from Notes (t, or M-p's Open the tab for the note) moves Notes beside the tab's Claude showing the note, as M-e does; off, it only goes to the tab |
 | Show a note's item whole in wtn's list (`wtn_item_preview`) | on | M-p's "Start work on a note's checklist items" shows the item under the cursor whole in the lower half of its list, its full text and what is indented under it, since the list cuts each item to one line; off, the list has the whole box |
 | Ask for a tab's note (`ask_tab_note`) | on | When M-e brings Notes beside a tab with no note of its own yet, ask which note is the tab's, the likely ones first, and show that note beside it from then on |
-| Point Claude at the tab's note (`tab_note_context`) | on | As a Claude session starts in a tab with a note of its own, tell it the note's path and to read it before its first reply, so the note's standing rules reach every session in the tab, in any repository, while Switchboard loads as a plugin (claude_plugin), whose session-start hook does it; off, a session reads the note only when asked to |
+| Point Claude at the tab's note (`tab_note_context`) | off | As a Claude session starts in a tab with a note of its own, tell it the note's path and to read it before its first reply, so the note's standing rules reach every session in the tab, in any repository, while Switchboard loads as a plugin (claude_plugin), whose session-start hook does it; off, a session reads the note only when asked to |
 
 ### Appearance
 
