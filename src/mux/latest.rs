@@ -116,7 +116,19 @@ pub fn build(checkout: &Path, target: Option<&Path>) -> Result<PathBuf, String> 
         ));
     }
     crate::trust::yours_or_listed(&paths::home(), checkout)?;
-    let mut cmd = Command::new(cargo());
+    let cargo = cargo();
+    let mut cmd = Command::new(&cargo);
+    // rustup's cargo runs the toolchain's, which finds rustc on the PATH: a
+    // server started without rustup's folder on its PATH (one taken from the
+    // build) has to be given it, or cargo can't run `rustc -vV`.
+    if let Some(dir) = cargo.parent().filter(|d| !d.as_os_str().is_empty()) {
+        let rest = std::env::var_os("PATH").unwrap_or_default();
+        let path = std::env::join_paths(
+            std::iter::once(dir.to_path_buf()).chain(std::env::split_paths(&rest)),
+        )
+        .unwrap_or(rest);
+        cmd.env("PATH", path);
+    }
     cmd.args([
         "build",
         "--release",
