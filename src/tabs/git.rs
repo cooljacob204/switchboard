@@ -175,6 +175,19 @@ pub fn local_branches(common_dir: &Path) -> Vec<String> {
 
 /// The repository's default branch: what `refs/remotes/origin/HEAD` names,
 /// else `main` or `master`, whichever is a local branch.
+/// Whether origin has `branch`, as the clone last fetched it, from its
+/// loose ref or `packed-refs`, with no git process.
+pub fn on_origin(common_dir: &Path, branch: &str) -> bool {
+    let name = format!("refs/remotes/origin/{branch}");
+    common_dir.join(&name).is_file()
+        || fs::read_to_string(common_dir.join("packed-refs")).is_ok_and(|packed| {
+            packed
+                .lines()
+                .filter_map(|l| l.split_once(' '))
+                .any(|(_, r)| r.trim() == name)
+        })
+}
+
 pub fn default_branch(common_dir: &Path) -> Option<String> {
     if let Ok(head) = fs::read_to_string(common_dir.join("refs/remotes/origin/HEAD"))
         && let Some(name) = head.trim().strip_prefix("ref: refs/remotes/origin/")
@@ -306,5 +319,22 @@ pub(crate) mod tests {
         let outside = scratch.0.join("plain");
         fs::create_dir_all(&outside).unwrap();
         assert_eq!(locate(&outside), None);
+    }
+
+    #[test]
+    fn origin_s_branches_are_read_loose_or_packed() {
+        let dir = Scratch::new("on-origin");
+        let common = &dir.0;
+        fs::create_dir_all(common.join("refs/remotes/origin/team")).unwrap();
+        fs::write(common.join("refs/remotes/origin/team/dev"), "abc\n").unwrap();
+        fs::write(
+            common.join("packed-refs"),
+            "# pack-refs with: peeled\nabc refs/remotes/origin/release\nabc refs/heads/local\n",
+        )
+        .unwrap();
+        assert!(on_origin(common, "team/dev"));
+        assert!(on_origin(common, "release"));
+        assert!(!on_origin(common, "local"));
+        assert!(!on_origin(common, "gone"));
     }
 }

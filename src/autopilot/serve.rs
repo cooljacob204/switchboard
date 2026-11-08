@@ -36,6 +36,7 @@ use super::place::{Mine, in_main_clone, in_worktree_of};
 use super::{AutopilotEvent, Command};
 use crate::agent::State;
 use crate::cmd::work::main_clone;
+use crate::cmd::work_recent;
 use crate::cmd::worktree_from_note::{self, Item};
 use crate::diff::in_place::PARKED_PANE;
 use crate::mission::Mission;
@@ -247,10 +248,12 @@ impl Server {
         });
     }
 
-    /// "Land on:": the repository's default branch first, so Enter keeps
-    /// landing there, then its local branches, read from git's files off
-    /// the task, then "Another branch…" to type one; `then` given the
-    /// branch, empty for the default one. The palette's "Start work on a
+    /// "Land on:": the branches picked here before, the most recent first
+    /// (src/cmd/work_recent.rs), then the repository's default branch, so
+    /// with nothing picked yet Enter lands there, then its other local
+    /// branches by name, read from git's files off the task, then "Another
+    /// branch…" to type one; `then` given the branch, empty for the default
+    /// one, and the pick kept for next time. The palette's "Start work on a
     /// note's checklist items" asks it too, after the items.
     pub(crate) fn autopilot_pick_target(
         &mut self,
@@ -262,17 +265,36 @@ impl Server {
             client,
             move || {
                 let common = crate::tabs::git::locate(&repo).map(|p| p.common_dir);
-                common
+                let (default, branches, recent) = common
+                    .as_deref()
                     .map(|c| {
-                        (
-                            crate::tabs::git::default_branch(&c),
-                            crate::tabs::git::local_branches(&c),
-                        )
+                        let mut branches = crate::tabs::git::local_branches(c);
+                        let recent = work_recent::branches(c);
+                        // A branch only origin has, picked through "Another
+                        // branch…", is made a local one only as an item
+                        // starts, so it stays listed while origin has it.
+                        let remote_only: Vec<String> = recent
+                            .iter()
+                            .filter(|b| !b.is_empty() && !branches.contains(b))
+                            .filter(|b| crate::tabs::git::on_origin(c, b))
+                            .cloned()
+                            .collect();
+                        branches.extend(remote_only);
+                        (crate::tabs::git::default_branch(c), branches, recent)
                     })
-                    .unwrap_or_default()
+                    .unwrap_or_default();
+                (common, default, branches, recent)
             },
-            move |server, client, (default, branches)| {
-                let items = mode::target_choices(default.as_deref(), &branches)
+            move |server, client, (common, default, branches, recent)| {
+                let keep = move |branch: &str| {
+                    if let Some(common) = common {
+                        let branch = branch.to_string();
+                        work_recent::in_background(move || {
+                            work_recent::pick_branch(&common, &branch)
+                        });
+                    }
+                };
+                let items = mode::target_choices(default.as_deref(), &branches, &recent)
                     .into_iter()
                     .map(|(label, value)| PickItem::new(label, value))
                     .collect();
@@ -293,7 +315,10 @@ impl Server {
                                     return;
                                 };
                                 match mode::typed_branch(&p.value) {
-                                    Some(b) => then(server, client, b),
+                                    Some(b) => {
+                                        keep(&b);
+                                        then(server, client, b)
+                                    }
                                     None => server.mission_note(
                                         client,
                                         format!("Not a branch name: {}", p.value),
@@ -302,7 +327,10 @@ impl Server {
                             })),
                         );
                     }
-                    Some(p) => then(server, client, p.value),
+                    Some(p) => {
+                        keep(&p.value);
+                        then(server, client, p.value)
+                    }
                     None => {}
                 });
             },

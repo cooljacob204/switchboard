@@ -292,23 +292,52 @@ pub struct NoteChoices {
 /// can be named (git refuses a `:` in one).
 pub const ANOTHER_BRANCH: &str = ":another";
 
-/// "Land on:"'s list, each option's label and value: the default branch
-/// first, its value empty so the mode keeps following it, then the other
-/// local branches, then "Another branch…" to type one.
-pub fn target_choices(default: Option<&str>, branches: &[String]) -> Vec<(String, String)> {
-    let mut out = vec![(
-        match default {
-            Some(d) => format!("{d} (the default branch)"),
-            None => "The default branch".to_string(),
-        },
-        String::new(),
-    )];
-    out.extend(
-        branches
-            .iter()
-            .filter(|b| Some(b.as_str()) != default)
-            .map(|b| (b.clone(), b.clone())),
-    );
+/// "Land on:"'s list, each option's label and value: the branches picked
+/// before (`recent`, from src/cmd/work_recent.rs, `""` for the default
+/// one, or its name when typed), the most recent first, then the default
+/// branch if it isn't among them, its value empty so the mode keeps
+/// following it, then the other local branches by name, then "Another branch…" to type one. With nothing
+/// picked yet the default branch leads, so Enter lands there.
+pub fn target_choices(
+    default: Option<&str>,
+    branches: &[String],
+    recent: &[String],
+) -> Vec<(String, String)> {
+    let default_row = || {
+        (
+            match default {
+                Some(d) => format!("{d} (the default branch)"),
+                None => "The default branch".to_string(),
+            },
+            String::new(),
+        )
+    };
+    let others: Vec<&String> = branches
+        .iter()
+        .filter(|b| Some(b.as_str()) != default)
+        .collect();
+    let mut out: Vec<(String, String)> = Vec::new();
+    for r in recent {
+        // The default branch typed by its name through "Another branch…"
+        // counts as a pick of the default one.
+        let is_default = r.is_empty() || Some(r.as_str()) == default;
+        if is_default {
+            if !out.iter().any(|(_, v)| v.is_empty()) {
+                out.push(default_row());
+            }
+        } else if others.contains(&r) && !out.iter().any(|(_, v)| v == r) {
+            out.push((r.clone(), r.clone()));
+        }
+    }
+    if !out.iter().any(|(_, v)| v.is_empty()) {
+        out.push(default_row());
+    }
+    let mut rest: Vec<&String> = others
+        .into_iter()
+        .filter(|b| !out.iter().any(|(_, v)| v == *b))
+        .collect();
+    rest.sort();
+    out.extend(rest.into_iter().map(|b| (b.clone(), b.clone())));
     out.push(("Another branch…".into(), ANOTHER_BRANCH.into()));
     out
 }
@@ -500,9 +529,9 @@ mod tests {
 
     #[test]
     fn land_on_lists_the_default_branch_first_then_the_others_then_another() {
-        let branches = ["cquinones/dev".to_string(), "main".into(), "x".into()];
+        let branches = ["x".to_string(), "main".into(), "cquinones/dev".into()];
         assert_eq!(
-            target_choices(Some("main"), &branches),
+            target_choices(Some("main"), &branches, &[]),
             [
                 ("main (the default branch)".to_string(), String::new()),
                 ("cquinones/dev".into(), "cquinones/dev".into()),
@@ -510,7 +539,7 @@ mod tests {
                 ("Another branch…".into(), ANOTHER_BRANCH.into()),
             ]
         );
-        assert_eq!(target_choices(None, &[])[0].0, "The default branch");
+        assert_eq!(target_choices(None, &[], &[])[0].0, "The default branch");
         assert_eq!(
             typed_branch(" release/1.2 ").as_deref(),
             Some("release/1.2")
@@ -518,5 +547,38 @@ mod tests {
         for bad in ["", "a b", "a..b", "-x", "x:y", "x.lock", "x/"] {
             assert_eq!(typed_branch(bad), None, "{bad}");
         }
+    }
+
+    #[test]
+    fn land_on_lists_the_branches_picked_before_first_the_most_recent_first() {
+        let branches = [
+            "z".to_string(),
+            "main".into(),
+            "cquinones/dev".into(),
+            "a".into(),
+        ];
+        let values = |recent: &[&str]| -> Vec<String> {
+            let recent: Vec<String> = recent.iter().map(|r| r.to_string()).collect();
+            target_choices(Some("main"), &branches, &recent)
+                .into_iter()
+                .map(|(_, v)| v)
+                .collect()
+        };
+        // The default branch by its own time among them, a branch gone left
+        // out, the rest by name.
+        assert_eq!(
+            values(&["z", "", "gone", "cquinones/dev"]),
+            ["z", "", "cquinones/dev", "a", ANOTHER_BRANCH]
+        );
+        // The default branch typed by its name counts as picked, once.
+        assert_eq!(
+            values(&["main", "z", ""]),
+            ["", "z", "a", "cquinones/dev", ANOTHER_BRANCH]
+        );
+        // Never picked, the default branch leads the rest.
+        assert_eq!(
+            values(&["cquinones/dev"]),
+            ["cquinones/dev", "", "a", "z", ANOTHER_BRANCH]
+        );
     }
 }

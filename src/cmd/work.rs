@@ -32,7 +32,7 @@ use std::sync::LazyLock;
 
 use regex::Regex;
 
-use crate::cmd::worktree_from_note;
+use crate::cmd::{work_recent, worktree_from_note};
 use crate::mux::keys::Action;
 use crate::mux::server::{ClientId, Event, Server};
 use crate::mux::{PaneId, TabId};
@@ -128,12 +128,31 @@ fn recent_session_dirs() -> Vec<PathBuf> {
     found.into_iter().map(|(_, d)| d).collect()
 }
 
-/// pick-dir.zsh's list, in its order, each once.
-fn offered(here: &Path, panes: &[PathBuf], wanted: Wanted) -> Vec<PathBuf> {
+/// The directory list for a key pressed in `here`.
+fn offered_from(here: &Path, panes: &[PathBuf], wanted: Wanted) -> Vec<PathBuf> {
+    let recent = work_recent::dirs();
+    offered(here, panes, &recent, &recent_session_dirs(), wanted)
+}
+
+/// pick-dir.zsh's list, each once: the directories picked before
+/// (`recent`, src/cmd/work_recent.rs), the most recent first, then
+/// pick-dir.zsh's order (the one you are in, every tab's, the sessions',
+/// home), every one put through the same checks. With nothing picked yet,
+/// the one you are in leads, so Enter alone takes it.
+fn offered(
+    here: &Path,
+    panes: &[PathBuf],
+    recent: &[PathBuf],
+    sessions: &[PathBuf],
+    wanted: Wanted,
+) -> Vec<PathBuf> {
     let home = paths::home();
-    let candidates = std::iter::once(here.to_path_buf())
+    let candidates = recent
+        .iter()
+        .cloned()
+        .chain(std::iter::once(here.to_path_buf()))
         .chain(panes.iter().cloned())
-        .chain(recent_session_dirs())
+        .chain(sessions.iter().cloned())
         .chain(std::iter::once(home));
     let mut seen = HashSet::new();
     let mut out = Vec::new();
@@ -353,7 +372,7 @@ impl Server {
         self.off_task(
             client,
             move || Found {
-                dirs: offered(&here, &panes, wanted),
+                dirs: offered_from(&here, &panes, wanted),
                 here,
                 clipboard: if clipboard {
                     platform::paste()
@@ -429,7 +448,7 @@ impl Server {
         self.off_task(
             client,
             move || Found {
-                dirs: offered(&here, &panes, Wanted::Any),
+                dirs: offered_from(&here, &panes, Wanted::Any),
                 here,
                 clipboard: String::new(),
             },
@@ -441,8 +460,9 @@ impl Server {
         );
     }
 
-    /// Asks which directory, the one the key was pressed in first; `then`
-    /// is given the one picked or typed, and the clipboard's first line.
+    /// Asks which directory, the ones picked before first, else the one the
+    /// key was pressed in; `then` is given the one picked or typed, and the
+    /// clipboard's first line, and the pick is kept for next time.
     fn ask_dir(
         &mut self,
         client: ClientId,
@@ -457,7 +477,8 @@ impl Server {
             .map(|d| PickItem::new(paths::tilde(d), d.to_string_lossy()))
             .collect();
         // Matches keep the list's order, as pick-dir.zsh's fzf --no-sort:
-        // here, the tabs' directories, the sessions', then home.
+        // the ones picked before, here, the tabs' directories, the
+        // sessions', then home.
         let picker = Picker::new(title, items)
             .named("pick-dir")
             .prompt("Open in > ")
@@ -500,6 +521,8 @@ impl Server {
                 },
                 Wanted::Any => dir,
             };
+            let kept = dir.clone();
+            work_recent::in_background(move || work_recent::pick_dir(&kept));
             then(server, client, dir, clipboard);
         });
     }
@@ -1012,6 +1035,24 @@ mod tests {
         assert_eq!(main_clone(&linked.join("src")), Some(main_real.clone()));
         assert_eq!(main_clone(&main), Some(main_real));
         assert_eq!(main_clone(&dir), None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn directories_picked_before_lead_the_list_else_the_one_you_are_in() {
+        let dir = std::env::temp_dir().join(format!("sb-offered-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let [here, tab, picked, older, gone] =
+            ["here", "tab", "picked", "older", "gone"].map(|n| dir.join(n));
+        for d in [&here, &tab, &picked, &older] {
+            std::fs::create_dir_all(d).unwrap();
+        }
+        let panes = [tab.clone()];
+        let none = offered(&here, &panes, &[], &[], Wanted::Any);
+        assert_eq!(none[..2], [here.clone(), tab.clone()]);
+        let recent = [picked.clone(), gone, older.clone(), tab.clone()];
+        let with = offered(&here, &panes, &recent, &[], Wanted::Any);
+        assert_eq!(with[..4], [picked, older, tab, here]);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
