@@ -329,10 +329,13 @@ impl App {
                 selected.insert(r, (s, e.max(s)));
             }
         }
-        let chips = if self.opts.ux2 {
-            render::chips(&lines, &kinds)
+        let (chips, landed) = if self.opts.ux2 {
+            (
+                render::chips(&lines, &kinds, &self.item_tabs),
+                render::landed(&lines, &kinds),
+            )
         } else {
-            Vec::new()
+            (Vec::new(), Vec::new())
         };
         let mut ctx = Ctx {
             raw: self.focus == Focus::Note
@@ -344,6 +347,7 @@ impl App {
             kinds,
             looks,
             chips,
+            landed,
             folded,
             selected,
         };
@@ -504,9 +508,9 @@ impl App {
                 Shown::Text {
                     row,
                     cells,
+                    first,
                     indent,
                     bg,
-                    ..
                 } => {
                     if let Some(bg) = bg {
                         buf.set_style(
@@ -531,6 +535,19 @@ impl App {
                         };
                         buf.set_stringn(x, y, &cell.text, cell.width, style);
                         x += cell.width as u16;
+                    }
+                    // A ticked item's commit, right-aligned on its line.
+                    if *first && let Some(Some(hash)) = ctx.landed.get(*row) {
+                        let chip = format!(" landed {hash} ");
+                        let w = width(&chip) as u16;
+                        if x + 1 + w <= text.right() {
+                            buf.set_string(
+                                text.right() - w,
+                                y,
+                                &chip,
+                                render::landed_style(self.opts.light),
+                            );
+                        }
                     }
                     // Past the end of the line, where Insert mode types.
                     let last_piece = shown
@@ -652,6 +669,8 @@ struct Ctx {
     looks: Vec<render::Look>,
     /// Each line's UX 2.0 chips, empty with it off.
     chips: Vec<Vec<render::Chip>>,
+    /// Each ticked item's UX 2.0 "landed <hash>" chip, empty with it off.
+    landed: Vec<Option<String>>,
     folded: std::collections::HashMap<usize, Option<usize>>,
     selected: std::collections::HashMap<usize, (usize, usize)>,
 }
