@@ -28,7 +28,10 @@
 //!                     shows the landing's step in this tab, the pane's
 //!                     @agent_phase, its loop marked queue-and-clean's
 //!                     (@agent_loop), since a session following the skill by
-//!                     reading it never invokes it; no words clear it
+//!                     reading it never invokes it; no words clear it.
+//!                     `tests failed [words]` and `review blocked [words]`
+//!                     mark a failed stage, which the Landing view draws red
+//!                     with the words after them
 //! land-lock autolanded <short hash> [item]
 //!                     says this tab landed without asking (the work-a-note
 //!                     mode's "Land without asking"): marks the tab
