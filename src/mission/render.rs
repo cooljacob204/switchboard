@@ -518,8 +518,9 @@ fn card(
 
 /// A tab's card as UX 2.0 draws it, `w` wide and `h` tall: a rounded box,
 /// its state's mark, number and name on the top edge and its state at the
-/// edge's right end, the last lines of its screen inside, down to a footer
-/// line with its branch dimmed.
+/// edge's right end, the last lines of its screen inside in the pane's own
+/// colors, down to a footer line with its branch dimmed and its PR's checks
+/// as marks.
 #[allow(clippy::too_many_arguments)]
 fn card_ux2(
     tab: &TabModel,
@@ -572,16 +573,32 @@ fn card_ux2(
     };
     // The screen's last lines, down to the footer.
     let room = h.saturating_sub(3);
-    let lines: &[String] = screen.map_or(&[], |s| &s.lines);
+    let lines: &[Vec<Span<'static>>] = screen.map_or(&[], |s| &s.lines);
     let shown = &lines[lines.len().saturating_sub(room)..];
     for _ in shown.len()..room {
         out.push(side(Vec::new()));
     }
     for line in shown {
-        out.push(side(vec![Span::styled(line.clone(), fg(theme.text))]));
+        out.push(side(line.clone()));
     }
     let branch = screen.and_then(|s| s.branch.clone()).unwrap_or_default();
-    out.push(side(vec![Span::styled(branch, fg(theme.dim))]));
+    let mut footer = vec![Span::styled(branch, fg(theme.dim))];
+    // The PR's checks as marks after the branch, failing first.
+    if let Some(c) = tab.checks {
+        for (mark, n, color) in [
+            ("✗", c.fail, Some(RED)),
+            ("✓", c.pass, Badge::Done.color()),
+            ("◌", c.pending, Badge::Working.color()),
+        ] {
+            if n > 0 {
+                footer.push(Span::styled(
+                    format!("  {mark}{n}"),
+                    fg(color.unwrap_or(theme.dim)),
+                ));
+            }
+        }
+    }
+    out.push(side(footer));
     out.push(vec![Span::styled(
         format!("╰{}╯", "─".repeat(w.saturating_sub(2))),
         edge,
@@ -2065,7 +2082,9 @@ mod tests {
         m.snap.screens.insert(
             TabId(3),
             crate::mission::Screen {
-                lines: (1..=40).map(|n| format!("line {n}")).collect(),
+                lines: (1..=40)
+                    .map(|n| vec![Span::raw(format!("line {n}"))])
+                    .collect(),
                 branch: Some("md-uncommitted".into()),
             },
         );
@@ -2082,6 +2101,51 @@ mod tests {
         assert!(text[bottom - 1].contains("md-uncommitted"), "{text:#?}");
         assert!(text[bottom - 2].contains("line 40"), "{text:#?}");
         assert!(!text.iter().any(|l| l.contains("line 1 ")));
+    }
+
+    #[test]
+    fn with_ux2_a_card_keeps_its_screens_colors_and_shows_its_checks_after_the_branch() {
+        let mut working = tab(3, "colors");
+        working.state = TabState::Working;
+        working.checks = Some(crate::facts::Checks {
+            pass: 12,
+            fail: 1,
+            pending: 0,
+        });
+        let mut m = mission(vec![working], Vec::new());
+        m.snap.rules.ux2 = true;
+        let lit = Style::new()
+            .fg(Color::Indexed(2))
+            .add_modifier(Modifier::BOLD);
+        m.snap.screens.insert(
+            TabId(3),
+            crate::mission::Screen {
+                lines: vec![vec![Span::raw("$ "), Span::styled("passed", lit)]],
+                branch: Some("colors-branch".into()),
+            },
+        );
+        let (lines, _) = screen(&m, 3 * 56, 30);
+        let text = texts(&lines);
+        let footer = text
+            .iter()
+            .position(|l| l.contains("colors-branch"))
+            .unwrap();
+        assert!(text[footer].contains("colors-branch  ✗1  ✓12"), "{text:#?}");
+        assert!(!text[footer].contains('◌'), "{text:#?}");
+        let screen_line = &lines[footer - 1];
+        let passed = screen_line
+            .spans
+            .iter()
+            .find(|s| s.content.contains("passed"))
+            .unwrap();
+        assert_eq!(passed.style.fg, Some(Color::Indexed(2)));
+        assert!(passed.style.add_modifier.contains(Modifier::BOLD));
+        let fail = screen_line_span(&lines[footer], "✗1");
+        assert_eq!(fail.style.fg, Some(RED));
+    }
+
+    fn screen_line_span<'a>(line: &'a Line, has: &str) -> &'a Span<'static> {
+        line.spans.iter().find(|s| s.content.contains(has)).unwrap()
     }
 
     // test/tmux-sidebar.test.js's "while a note is worked continuously,
