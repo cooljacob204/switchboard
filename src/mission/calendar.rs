@@ -572,12 +572,28 @@ fn timeline(
         / 60.0)
         .ceil() as i64)
         .min(24);
-    // A day longer than the screen starts an hour before now.
+    // A day longer than the screen starts an hour before now, then moves
+    // as little as it takes to show the chosen event, its start at least.
     let fits = (rows as i64 / PER_HOUR).max(1);
     let first = if to - from <= fits {
         from
     } else {
-        from.max(((now_min / 60.0).floor() as i64 - 1).min(to - fits))
+        let around_now = from.max(((now_min / 60.0).floor() as i64 - 1).min(to - fits));
+        match timed.iter().find(|t| look.cursor == Some(t.0)) {
+            Some(&(_, _, start, end)) => {
+                let start_hour = (start / 60.0).floor() as i64;
+                let end_hour = ((end / 60.0).ceil() as i64).max(start_hour + 1);
+                let first = if start_hour < around_now {
+                    start_hour
+                } else if end_hour > around_now + fits {
+                    (end_hour - fits).min(start_hour)
+                } else {
+                    around_now
+                };
+                first.clamp(from, (to - fits).max(from))
+            }
+            None => around_now,
+        }
     };
     let count = rows.min(((to - first) * PER_HOUR).max(0) as usize);
     let step = 60.0 / PER_HOUR as f64;
@@ -1105,6 +1121,27 @@ mod tests {
         assert_eq!(shade("Four"), Some(Color::Indexed(SOLID[1])));
         // From 7, an hour before the first event's day.
         assert!(text[2].starts_with("   7 AM"), "{text:?}");
+    }
+
+    #[test]
+    fn with_ux2_a_day_longer_than_the_screen_moves_to_show_the_chosen_event() {
+        let tz = tz();
+        let v = view(vec![
+            event("Standup", (9, 0), (9, 15), "going"),
+            event("Retro", (17, 0), (18, 0), "going"),
+        ]);
+        let shown = |cursor| {
+            let look = Look {
+                ux2: true,
+                ..look(cursor, 16, now(9, 0), &tz)
+            };
+            texts(&day(&v, &look).0).join("\n")
+        };
+        // From an hour before now, five hours fit: the five o'clock event
+        // is below them until it is chosen, then in sight.
+        assert!(!shown(None).contains("Retro"), "{}", shown(None));
+        assert!(shown(Some(1)).contains("Retro"), "{}", shown(Some(1)));
+        assert!(shown(Some(0)).contains("Standup"), "{}", shown(Some(0)));
     }
 
     #[test]
