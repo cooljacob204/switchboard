@@ -135,8 +135,9 @@ pub enum Action {
     StopSlackRelay,
     /// M-p's "Update Switchboard" and "Run Switchboard's setup" (src/update).
     Update(crate::update::Command),
-    /// Restart the server on the build installed now, keeping every pane,
-    /// tab and terminal attached (src/mux/upgrade.rs).
+    /// Build the checkout a build from a clone came from, then restart the
+    /// server on it when it is new, keeping every pane, tab and terminal
+    /// attached (src/mux/latest.rs, src/mux/upgrade.rs).
     Upgrade,
     /// Notes in the workspace: M-N, M-e, a note's tab and a tab's note
     /// (src/notes/serve.rs).
@@ -404,7 +405,7 @@ impl Action {
             Action::SlackRelay => "Open the Slack relay in its own tab".into(),
             Action::StopSlackRelay => "Stop the Slack relay".into(),
             Action::Update(command) => command.about().into(),
-            Action::Upgrade => "Restart Switchboard on the new build, keeping every pane".into(),
+            Action::Upgrade => "Restart Switchboard on the latest build on disk".into(),
             Action::Notes(command) => command.about().into(),
             Action::Extra(command) => command.about().into(),
             Action::Autopilot(command) => command.about().into(),

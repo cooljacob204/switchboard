@@ -778,6 +778,13 @@
     "default": true
   },
   {
+    "key": "build_before_restart",
+    "category": "Updates",
+    "label": "Build before restarting",
+    "description": "M-p's \"Restart Switchboard on the latest build on disk\" first builds the checkout a build from a clone came from (cargo build --release --locked) and puts it in place of the binary the server runs, restarting only when that is new; off, it restarts on the binary on disk as it is, when that is new",
+    "default": true
+  },
+  {
     "key": "haiku_summaries",
     "category": "Slack relay",
     "label": "Haiku summaries",
