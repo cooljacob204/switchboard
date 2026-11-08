@@ -1,5 +1,5 @@
-//! Working a note continuously (src/autopilot) as someone turns it on,
-//! against a server of the test's own: M-p's "Work the note continuously"
+//! Autopilot (src/autopilot) as someone turns it on,
+//! against a server of the test's own: M-p's "Autopilot: work a note"
 //! asked from a pane in a throwaway repository, the note picked and the
 //! counts kept as they were, and the server opens a background tab for the
 //! note's first item running `wtn`, marked as the mode's, then one for the
@@ -101,8 +101,8 @@ fn turning_it_on_opens_a_tab_for_the_notes_next_item_then_the_next_and_says_when
     server.ok(&["new-tab", "-c", repo.to_str().unwrap()]);
     client.type_text("\x1bp");
     client.wait_text("action>");
-    client.type_text("continuously");
-    client.wait_text("Work the note continuously");
+    client.type_text("autopilot");
+    client.wait_text("Autopilot: work a note");
     client.type_text("\r");
     let screen = client.wait_text("More notes…");
     assert!(

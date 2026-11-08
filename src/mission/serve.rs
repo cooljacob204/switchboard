@@ -1478,7 +1478,7 @@ impl Server {
     /// Puts a notification away, by the source that gave it: the next
     /// meeting until another, a Slack message until its thread gets more,
     /// the calendar's changes by taking the day as seen, a new note, an
-    /// Inbox item (here alone), what the mode working a note said.
+    /// Inbox item (here alone), what autopilot said.
     pub(crate) fn notice_dismiss(&mut self, source: &str, item: &Item) {
         match source {
             "inbox" => self.inbox_dismiss(item),

@@ -840,7 +840,7 @@ impl Server {
     /// its full title, and linked to its note (`@tab_name`, `@tab_title`,
     /// `@tab_note`), running `wtn --item <line>` with the
     /// note's path in WTN_NOTE, so only the line number is a word of the
-    /// command. What working a note continuously opens for each item it
+    /// command. What autopilot opens for each item it
     /// takes too (wtn-open.zsh's `open_tab`).
     pub fn open_item_tab(
         &mut self,

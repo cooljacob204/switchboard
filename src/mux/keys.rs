@@ -144,7 +144,7 @@ pub enum Action {
     /// The rest of tmux.conf's keys and M-p's commands: M-0, C-w, renaming
     /// the tab, mission control on a view and the rest (src/extras).
     Extra(crate::extras::Command),
-    /// Working a note continuously (src/autopilot).
+    /// Autopilot (src/autopilot).
     Autopilot(crate::autopilot::Command),
 }
 

@@ -11,14 +11,14 @@
 //! the PR and the ticket as the tab's name was last worked out, never the
 //! network, so it opens at once.
 //!
-//! A tab opened for a note's item (the palette's wtn list, the work-a-note
-//! mode) is named with the item's first 50 characters cut back to a word
+//! A tab opened for a note's item (the palette's wtn list, autopilot)
+//! is named with the item's first 50 characters cut back to a word
 //! and ending in … (`short_name`), for the tab bar and the second status
 //! line, and keeps the item's whole first line as its full title
 //! (`@tab_title`), which this box, the sidebar and mission control show in
 //! its place, its PR number in front, only while the tab's name is still
 //! that item cut short (`cut_of`), so a tab renamed since shows its new
-//! name. A tab opened before falls back to the work-a-note mode's
+//! name. A tab opened before falls back to autopilot's
 //! `@autopilot_item`, and this box then to the item its branch is for
 //! (`wtnItem` in git's config, read from its file, the note named by its ID
 //! or, from before notes had IDs, its path). Ported from

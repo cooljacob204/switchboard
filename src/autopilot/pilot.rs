@@ -899,7 +899,7 @@ mod tests {
         }
     }
 
-    // test/tmux-sidebar.test.js's "working a note continuously keeps 3 tabs
+    // test/tmux-sidebar.test.js's "autopilot keeps 3 tabs
     // working and at most 5 open, a tab waiting on you freeing its slot, one
     // landed leaving the mode, and stops on pause or an empty note".
     #[test]
@@ -1389,7 +1389,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    // test/tmux-sidebar.test.js's "a landed tab of the mode working a note
+    // test/tmux-sidebar.test.js's "a landed tab of autopilot
     // closes once seen and left, or half an hour after landing".
     #[test]
     fn a_landed_tab_is_marked_then_closed_once_seen_and_left_or_long_after_it_landed() {

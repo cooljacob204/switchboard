@@ -33,8 +33,8 @@
 //!                     mark a failed stage, which the Landing view draws red
 //!                     with the words after them
 //! land-lock autolanded <short hash> [item]
-//!                     says this tab landed without asking (the work-a-note
-//!                     mode's "Land without asking"): marks the tab
+//!                     says this tab landed without asking (autopilot's
+//!                     "Land without asking"): marks the tab
 //!                     @autopilot_autoland with the hash, which the sidebar
 //!                     shows, and adds the landing to the notifications
 //!                     (autolanded.json in the state directory)

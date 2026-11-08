@@ -1488,7 +1488,7 @@ impl Server {
     /// (daemon.js's `openNotice`): the next meeting joins its call (with
     /// none, the Calendar view opens), the newest note written for you
     /// opens in Notes, a calendar change opens the Calendar view, a
-    /// suggestion Settings, the mode working a note mission control's tabs,
+    /// suggestion Settings, autopilot mission control's tabs,
     /// where its line is, and the others mission control on their view.
     fn sidebar_open_notice(&mut self, client: ClientId, owner: &Owner) {
         let Owner::Notice { source, id } = owner else {

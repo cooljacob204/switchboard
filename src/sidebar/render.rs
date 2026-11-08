@@ -588,7 +588,7 @@ pub fn sidebar_lines(
             if tab.notes_here {
                 parts.push("✎ Notes here".into());
             }
-            // A tab the mode working a note opened says so, and that it
+            // A tab autopilot opened says so, and that it
             // landed once back in the main clone, closing soon, and whether
             // it landed without asking.
             if tab.autopilot {

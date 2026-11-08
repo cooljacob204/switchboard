@@ -3,7 +3,7 @@
 //! every refresh, its notice) and what tmux/wtn-open.zsh's `next` did, done
 //! in the server task.
 //!
-//! M-p's "Work the note continuously" opens mission control on its tabs,
+//! M-p's "Autopilot: work a note" opens mission control on its tabs,
 //! then, with the mode off, asks which note (those holding an unticked
 //! item, the one last worked first, then the newest, the rest behind "More
 //! notes…"), how many of its tabs work at once, the most open and a
@@ -143,10 +143,7 @@ impl Server {
                     .unwrap_or_else(paths::home);
                 self.open_mission(client, Opening::Tabs);
                 if !settings::is_on("autopilot") {
-                    self.mission_note(
-                        client,
-                        "Working a note continuously is off in Settings (Work a note continuously)",
-                    );
+                    self.mission_note(client, "Autopilot is off in Settings (Autopilot)");
                     return;
                 }
                 if Mode::read(&paths::state_dir()).on {
@@ -1020,7 +1017,7 @@ impl Server {
     fn autopilot_notices(&mut self, mode: &Mode) {
         let on = settings::is_on("autopilot");
         let items = if on && !mode.said.is_empty() {
-            vec![crate::items::Item::new("said", &mode.said).detail("working a note continuously")]
+            vec![crate::items::Item::new("said", &mode.said).detail("autopilot")]
         } else {
             Vec::new()
         };
@@ -1030,10 +1027,10 @@ impl Server {
                 .iter()
                 .map(|c| {
                     let mut item = crate::items::Item::new(&c.id, c.title())
-                        .detail("working a note continuously")
+                        .detail("autopilot")
                         .time(c.at);
                     item.lines = vec![
-                        "Closed by working a note continuously once it landed, without your seeing it (Settings' Close a worked note's landed tabs); its item's Done: line in the note says what landed".to_string(),
+                        "Closed by autopilot once it landed, without your seeing it (Settings' Close a worked note's landed tabs); its item's Done: line in the note says what landed".to_string(),
                     ];
                     item
                 })
@@ -1050,7 +1047,7 @@ impl Server {
                     .time(l.at);
                 let at = util::local_at_ms(l.at).strftime("%-I:%M %p").to_string();
                 item.lines = vec![format!(
-                    "Landed on the default branch without asking, as working a note continuously's \"Land without asking\" allows, at {at}"
+                    "Landed on the default branch without asking, as autopilot's \"Land without asking\" allows, at {at}"
                 )];
                 item.data = serde_json::json!({ "tab": l.tab });
                 item

@@ -75,7 +75,7 @@ pub use pilot::Pilot;
 /// M-p's command, the one way to set the mode up or change it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Command {
-    /// "Work the note continuously": with the mode off, which note, how
+    /// "Autopilot: work a note": with the mode off, which note, how
     /// many tabs at once, the most open and a spend limit, then on; with it
     /// on, its menu.
     WorkNote,
@@ -99,7 +99,7 @@ impl Command {
     pub fn about(self) -> &'static str {
         match self {
             Command::WorkNote => {
-                "Work the note continuously: keep tabs working through a note's checklist with wtn, the next opened as each lands"
+                "Autopilot: work a note: keep tabs working through a note's checklist with wtn, the next opened as each lands"
             }
         }
     }

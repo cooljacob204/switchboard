@@ -115,7 +115,7 @@ pub enum Do {
         source: String,
         item: Box<Item>,
     },
-    /// What working a note continuously offers (src/autopilot).
+    /// What autopilot offers (src/autopilot).
     Autopilot(crate::autopilot::Act),
     /// A CI job's kept log, read in a pane beside the one you're in.
     ReadLog {

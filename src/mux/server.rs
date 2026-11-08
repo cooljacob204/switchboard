@@ -117,7 +117,7 @@ pub enum Event {
     /// The rest of what a Notes key does, back from off the task
     /// (src/notes/serve.rs).
     Notes(crate::notes::serve::NotesEvent),
-    /// What working a note continuously found off the task (src/autopilot).
+    /// What autopilot found off the task (src/autopilot).
     Autopilot(crate::autopilot::AutopilotEvent),
     /// The check of a new build to restart on answered (src/mux/upgrade.rs).
     Upgrade(super::upgrade::UpgradeEvent),
@@ -363,7 +363,7 @@ pub struct Server {
     pub update: crate::update::Updates,
     /// The clients waiting on C-w's next key (src/extras).
     pub extras: crate::extras::Extras,
-    /// Working a note continuously (src/autopilot).
+    /// Autopilot (src/autopilot).
     pub autopilot: crate::autopilot::Autopilot,
     /// What the terminal attached last says of itself: its cell's size
     /// (src/mux/terminal.rs).

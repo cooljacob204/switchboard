@@ -233,7 +233,7 @@ impl Server {
                 }
                 self.redraw_tab(tab);
             }
-            // A tab of the mode working a note, landed and back in the main
+            // A tab of autopilot, landed and back in the main
             // clone, has been seen, so it closes once you leave it
             // (src/autopilot).
             if let Some(t) = self.tabs.get_mut(&tab)

@@ -13,7 +13,7 @@
 //! function, which works as `wt` does (worktree_from_ticket.rs).
 //!
 //! What M-p's "Start work on a note's checklist items" listed, and what
-//! working a note continuously takes next (tmux/wtn-open.zsh's `items`,
+//! autopilot takes next (tmux/wtn-open.zsh's `items`,
 //! `item`, `unclaimed`, `plan_of` and `queue`), is here too, since it reads
 //! the note and the repository the same way: `items`, `item_text`,
 //! `unclaimed`, `plan_of` and `queue`, for the server's palette command and
@@ -44,7 +44,7 @@ const SLUG_LENGTH: usize = 50;
 
 /// Each item wtn starts, kept a day, `<seconds>\t<note's ID>\t<item's
 /// first line>` (the note's path in a row from before notes had IDs): the
-/// work-a-note mode's queue takes an item claimed in the last
+/// autopilot's queue takes an item claimed in the last
 /// `CLAIMED_S` as taken even once its worktree is gone, since
 /// queue-and-clean may remove it a moment before ticking the item.
 pub fn claims_file() -> PathBuf {
@@ -420,7 +420,7 @@ pub fn plan_of(notes: &Path, item: &str) -> Plan {
     }
 }
 
-/// The items working a note continuously would take, in its order: those
+/// The items autopilot would take, in its order: those
 /// whose plan is settled first, then those with no plan (or a plan note
 /// that isn't there), each in the note's order. An item whose plan needs a
 /// choice is never taken, nor one under a parked section, nor one a

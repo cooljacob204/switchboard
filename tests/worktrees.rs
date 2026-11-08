@@ -1521,7 +1521,7 @@ fn the_items_a_worktree_works_on_are_left_out_until_it_is_removed_and_the_queue_
         "back once its worktree is removed, its branch kept"
     );
 
-    // The queue working a note continuously takes.
+    // The queue autopilot takes.
     std::fs::write(
         notes.join("Work.md"),
         [
