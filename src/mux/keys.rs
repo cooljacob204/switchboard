@@ -95,7 +95,7 @@ pub enum Action {
     WorkOnBranch,
     /// Work on a pull request in a new tab running `wtpr`.
     WorkOnPr,
-    /// Work on a note's checklist items, each in a new tab running `wtn`.
+    /// Work on a note's checklist items, each in a new tab running `wtn` (M-I).
     WorkOnNote,
     /// Carry on shaping Linear tickets, each in a new tab running `shape`.
     ContinueShaping,
@@ -521,7 +521,6 @@ impl Action {
             Action::ToggleTheme,
             Action::ToggleSidebar,
             Action::WorkOnPr,
-            Action::WorkOnNote,
             Action::ContinueShaping,
             Action::ShapeNote,
             Action::ShapeNewTicket,
@@ -589,6 +588,7 @@ impl Default for Bindings {
         bind("M-n", NewClaudeTab);
         bind("M-W", WorkOnTickets);
         bind("M-B", WorkOnBranch);
+        bind("M-I", WorkOnNote);
         bind("M-a", NextNeedsYou);
         bind("M-A", NextIdle);
         bind("M-c", FocusClaude);
