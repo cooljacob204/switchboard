@@ -1354,6 +1354,8 @@ const STAGES_AT: usize = 40;
 const STAGE_WIDTH: usize = 13;
 const STAGE_STEP: usize = 14;
 const STAGES: [&str; 6] = ["tests", "review", "leak check", "lock", "push", "applied"];
+/// A merge queue's stages, as its rows are drawn.
+const QUEUE_STAGES: [&str; 5] = ["CI", "approved", "merge queue", "merge", "deploy test"];
 
 /// How far a stage of a landing has got.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1362,6 +1364,7 @@ enum Stage {
     Running,
     Waiting,
     Queued,
+    Failed,
 }
 
 impl Stage {
@@ -1372,6 +1375,7 @@ impl Stage {
             Stage::Running => (Color::Indexed(75), Color::Indexed(17), true),
             Stage::Waiting => (theme.dim, theme.panel, false),
             Stage::Queued => (Color::Indexed(176), Color::Indexed(53), false),
+            Stage::Failed => (Color::Indexed(210), Color::Indexed(52), true),
         }
     }
 }
@@ -1380,8 +1384,10 @@ impl Stage {
 /// a worktree is in the landing queue only once its tests, review and leak
 /// check are done (queue-and-clean takes the lock after them), so those are
 /// done; a waiter is queued for the lock at its place; the one holding it
-/// is at the step its phase names. Nothing it holds says a stage failed, so
-/// there is no failed cell.
+/// is at the step its phase names, a failure included (`tests failed …`,
+/// `review blocked …`, the words after it shown in the cell). Neither the
+/// phase nor the landing's files hold a test count or the review's rounds,
+/// so a done cell says only "passed" or "clean".
 fn landing_stages(landing: &serde_json::Value) -> [(Stage, String); 6] {
     let done = |s: &str| (Stage::Done, format!("✓ {s}"));
     let running = |s: &str| (Stage::Running, s.to_string());
@@ -1399,13 +1405,7 @@ fn landing_stages(landing: &serde_json::Value) -> [(Stage, String); 6] {
             .get("place")
             .and_then(serde_json::Value::as_u64)
             .unwrap_or(1);
-        let suffix = match (place % 10, place % 100) {
-            (1, n) if n != 11 => "st",
-            (2, n) if n != 12 => "nd",
-            (3, n) if n != 13 => "rd",
-            _ => "th",
-        };
-        out[3] = (Stage::Queued, format!("{place}{suffix}"));
+        out[3] = (Stage::Queued, ordinal(place));
         return out;
     }
     out[3] = done("held");
@@ -1413,7 +1413,18 @@ fn landing_stages(landing: &serde_json::Value) -> [(Stage, String); 6] {
         .get("phase")
         .and_then(serde_json::Value::as_str)
         .unwrap_or("");
-    if phase.contains("testing") {
+    let failed = |rest: &str, or: &str| {
+        let rest = rest.trim_start_matches([':', ' ']).trim();
+        (
+            Stage::Failed,
+            format!("✕ {}", if rest.is_empty() { or } else { rest }),
+        )
+    };
+    if let Some(rest) = phase.strip_prefix("tests failed") {
+        out[0] = failed(rest, "failed");
+    } else if let Some(rest) = phase.strip_prefix("review blocked") {
+        out[1] = failed(rest, "blocked");
+    } else if phase.contains("testing") {
         out[0] = running("testing…");
     } else if phase.starts_with("reviewing") {
         out[1] = running("reviewing…");
@@ -1427,6 +1438,56 @@ fn landing_stages(landing: &serde_json::Value) -> [(Stage, String); 6] {
         out[5] = done("applied");
     }
     out
+}
+
+/// A merge queue row's stages from what the view holds of it
+/// (`data.queue.state` and `position`): GitHub lets a PR into the queue only
+/// once its checks pass and it is approved, so those are done; the queue
+/// cell is its place, its checks running, or a failure when it can't merge;
+/// merging is the merge stage running. The deploy test waits, since the row
+/// leaves the queue once it merges.
+fn queue_stages(queue: &serde_json::Value) -> [(Stage, String); 5] {
+    let state = queue
+        .get("state")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("");
+    let position = queue
+        .get("position")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
+    let waiting = || (Stage::Waiting, "waiting".to_string());
+    let mut out = [
+        (Stage::Done, "✓ CI".to_string()),
+        (Stage::Done, "✓ approved".to_string()),
+        (
+            Stage::Queued,
+            format!("{} in queue", ordinal(position.max(1))),
+        ),
+        waiting(),
+        waiting(),
+    ];
+    match state {
+        "AWAITING_CHECKS" => out[2] = (Stage::Running, "checks…".into()),
+        "UNMERGEABLE" => out[2] = (Stage::Failed, "✕ can't merge".into()),
+        "MERGEABLE" => out[2] = (Stage::Done, "✓ ready".into()),
+        "LOCKED" => {
+            out[2] = (Stage::Done, "✓ ready".into());
+            out[3] = (Stage::Running, "merging…".into());
+        }
+        _ => {}
+    }
+    out
+}
+
+/// `n` with its English ordinal suffix: 1st, 2nd, 11th.
+fn ordinal(n: u64) -> String {
+    let suffix = match (n % 10, n % 100) {
+        (1, m) if m != 11 => "st",
+        (2, m) if m != 12 => "nd",
+        (3, m) if m != 13 => "rd",
+        _ => "th",
+    };
+    format!("{n}{suffix}")
 }
 
 /// `text` centered in `w` columns.
@@ -1484,10 +1545,22 @@ fn stage_rows(
             row.put(format!(" {}", item.title), bold(theme.bright))
                 .put(format!("   {count}"), fg(theme.dim));
             lines.push(row.line(cols, fill));
-            if item.id.ends_with(":direct") {
+            let names: &[&str] = if item.id.ends_with(":direct") {
+                &STAGES
+            } else if item.id.ends_with(":queue") {
+                &QUEUE_STAGES
+            } else {
+                &[]
+            };
+            if !names.is_empty() {
+                let first = if names.len() == STAGES.len() {
+                    " worktree"
+                } else {
+                    " pull request"
+                };
                 let mut heads = Row::default();
-                heads.put(text::pad(" worktree", STAGES_AT), fg(theme.dim));
-                for name in STAGES {
+                heads.put(text::pad(first, STAGES_AT), fg(theme.dim));
+                for name in names {
                     heads
                         .put(centered(name, STAGE_WIDTH), fg(theme.dim))
                         .put(" ", Style::new());
@@ -1497,7 +1570,15 @@ fn stage_rows(
             continue;
         }
         let pointer = if chosen { "▌" } else { " " };
-        let Some(landing) = item.data.get("landing").filter(|l| l.is_object()) else {
+        let stages: Vec<(Stage, String)> =
+            if let Some(landing) = item.data.get("landing").filter(|l| l.is_object()) {
+                landing_stages(landing).to_vec()
+            } else if let Some(queue) = item.data.get("queue").filter(|q| q.is_object()) {
+                queue_stages(queue).to_vec()
+            } else {
+                Vec::new()
+            };
+        if stages.is_empty() {
             hit(lines);
             let mut row = Row::default();
             row.put(pointer, fg(ACCENT))
@@ -1507,7 +1588,7 @@ fn stage_rows(
                 .put(item.detail.clone(), fg(theme.dim));
             lines.push(row.line(cols, fill));
             continue;
-        };
+        }
         let name = item
             .title
             .split_once(". ")
@@ -1518,7 +1599,7 @@ fn stage_rows(
             text::pad(&text::cut(name, name_w), STAGES_AT - 2),
             bold(theme.bright),
         );
-        for (stage, label) in landing_stages(landing) {
+        for (stage, label) in stages {
             let (color, bg, strong) = stage.look(theme);
             let style = if strong { bold(color) } else { fg(color) }.bg(bg);
             top.put(centered(&label, STAGE_WIDTH), style)
@@ -2370,6 +2451,58 @@ mod tests {
             .find(|s| s.content.contains("pushing…"))
             .unwrap();
         assert_eq!(pushing.style.bg, Some(Color::Indexed(17)));
+        // A failed stage is a red cell with ✕ and the phase's words.
+        let failing = Item::new("land:/w/x", "1. note-full-titles").data(serde_json::json!({
+            "landing": { "holding": true, "phase": "tests failed 2 of 401" },
+        }));
+        let queued = |state: &str| {
+            Item::new("https://pr/2031", "1. #2031 settings page").data(serde_json::json!({
+                "queue": { "state": state, "position": 3 },
+            }))
+        };
+        let more = vec![
+            views::header("/r:direct", "switchboard · straight to main", 1),
+            failing,
+            views::header("/r:queue", "web-app · merge queue", 2),
+            queued("QUEUED"),
+            queued("UNMERGEABLE"),
+        ];
+        let mut f = mission(
+            Vec::new(),
+            vec![list_view(ViewId::Landing, "Landing", more)],
+        );
+        f.snap.rules.ux2 = true;
+        f.view = 1;
+        let (flines, _) = screen(&f, 140, 30);
+        let ftext = texts(&flines);
+        let row = ftext
+            .iter()
+            .position(|l| l.contains("note-full-titles"))
+            .unwrap();
+        let cell = flines[row]
+            .spans
+            .iter()
+            .find(|s| s.content.contains("✕ 2 of 401"))
+            .unwrap();
+        assert_eq!(cell.style.bg, Some(Color::Indexed(52)));
+        // A merge queue's PR is a row of its own stages.
+        let heads = ftext.iter().find(|l| l.contains("pull request")).unwrap();
+        assert!(
+            heads.contains("CI") && heads.contains("deploy test"),
+            "{heads}"
+        );
+        let pr = ftext
+            .iter()
+            .position(|l| l.contains("#2031 settings page"))
+            .unwrap();
+        assert!(
+            ftext[pr].contains("✓ CI")
+                && ftext[pr].contains("✓ approved")
+                && ftext[pr].contains("3rd in queue"),
+            "{}",
+            ftext[pr]
+        );
+        assert!(ftext[pr + 2].contains("✕ can't merge"), "{}", ftext[pr + 2]);
         // Off, the rows are as before.
         m.snap.rules.ux2 = false;
         let (lines, _) = screen(&m, 140, 20);
