@@ -557,7 +557,7 @@
     "key": "view_autopilot",
     "category": "Mission control",
     "label": "Autopilot view",
-    "description": "With UX 2.0 on, while autopilot works a note, mission control shows a view of it: the note, its tabs working and open against its slots and cap, a row of stage cells for each tab it opened from opened to closed, and the items it opens next and those skipped. Off, its line above the tabs stays and the view goes",
+    "description": "With UX 2.0 on, while autopilot works a note, mission control shows a view of it: the note, its tabs working and open against its slots and cap, a row of stage cells for each tab it opened from opened to closed, and the items it opens next and those skipped. Off, its line above the tabs stays and the view goes; on, the view takes the line's place",
     "default": true
   },
   {

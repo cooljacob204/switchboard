@@ -38,8 +38,8 @@ use crate::agent::State;
 use crate::cmd::work::main_clone;
 use crate::cmd::worktree_from_note::{self, Item};
 use crate::diff::in_place::PARKED_PANE;
+use crate::mission::Mission;
 use crate::mission::ask::Ask;
-use crate::mission::{Mission, Opening};
 use crate::mux::server::{ClientId, Event, Server};
 use crate::mux::{PaneId, TabId};
 use crate::sidebar::model::TabState;
@@ -141,7 +141,7 @@ impl Server {
                     .and_then(|p| self.panes.get(&p))
                     .and_then(|s| s.pane.cwd())
                     .unwrap_or_else(paths::home);
-                self.open_mission(client, Opening::Tabs);
+                self.open_mission(client, super::opening());
                 if !settings::is_on("autopilot") {
                     self.mission_note(client, "Autopilot is off in Settings (Autopilot)");
                     return;
@@ -534,7 +534,7 @@ impl Server {
                 self.autopilot_setup(client, &dir);
             }
             Act::ChangeTarget => self.autopilot_change_target(client),
-            Act::ToTabs => self.open_mission(client, Opening::Tabs),
+            Act::ToTabs => self.open_mission(client, super::opening()),
             Act::Dismiss => {
                 self.autopilot_say("");
                 self.mission_note(client, "Dismissed.");
@@ -591,10 +591,11 @@ impl Server {
         }
     }
 
-    /// What mission control's line shows, while the mode is on.
+    /// What mission control's line shows, while the mode is on and has no
+    /// view of its own (src/autopilot/view.rs) to say it in instead.
     pub fn autopilot_summary(&self) -> Option<Summary> {
         let mode = &self.autopilot.mode;
-        (settings::is_on("autopilot") && mode.on)
+        (settings::is_on("autopilot") && mode.on && !super::has_view())
             .then(|| self.autopilot.pilot.summary(mode, self.away_now()))
     }
 
@@ -608,8 +609,7 @@ impl Server {
         keep: bool,
         landing: &[crate::items::Item],
     ) -> Option<Vec<crate::items::Item>> {
-        let on = settings::is_on;
-        if !(on("ux2") && on("view_autopilot") && on("autopilot")) {
+        if !super::has_view() {
             return None;
         }
         let mode = &self.autopilot.mode;

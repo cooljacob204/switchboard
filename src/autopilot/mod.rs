@@ -74,6 +74,24 @@ pub use line::{Act, Summary};
 pub use mode::Mode;
 pub use pilot::Pilot;
 
+/// Whether the mode has its own view in mission control (UX 2.0 and the
+/// view_autopilot setting on), which then takes the place of its line
+/// leading the Tabs view.
+pub fn has_view() -> bool {
+    let on = crate::settings::is_on;
+    on("ux2") && on("view_autopilot") && on("autopilot")
+}
+
+/// Where mission control opens to show the mode: its own view while it has
+/// one, else the Tabs view its line leads.
+pub fn opening() -> crate::mission::Opening {
+    if has_view() {
+        crate::mission::Opening::View("autopilot".into())
+    } else {
+        crate::mission::Opening::Tabs
+    }
+}
+
 /// M-p's command, the one way to set the mode up or change it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Command {

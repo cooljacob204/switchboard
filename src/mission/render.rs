@@ -1809,7 +1809,8 @@ fn pilot_rows(
             row.put(" AUTO ", bold(ACCENT))
                 .put(item.title.clone(), bold(theme.bright))
                 .put(format!("   {}", item.detail), fg(theme.dim));
-            lines.push(row.line(cols, None));
+            hit(lines);
+            lines.push(row.line(cols, fill));
             let mut heads = Row::default();
             heads.put(text::pad(" item", PILOT_AT), fg(theme.dim));
             for name in crate::autopilot::view::STAGES {

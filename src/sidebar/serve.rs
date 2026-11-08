@@ -1519,7 +1519,7 @@ impl Server {
             },
             "calendar" => self.open_mission(client, view("calendar")),
             "habits" => self.open_mission(client, crate::mission::Opening::Settings),
-            "autopilot" => self.open_mission(client, crate::mission::Opening::Tabs),
+            "autopilot" => self.open_mission(client, crate::autopilot::opening()),
             // The landed tabs closed unseen are only to be read: Enter
             // dismisses them.
             "landed" => self.autopilot_dismiss_closed(None),
@@ -1558,7 +1558,7 @@ impl Server {
             "inbox" if on("linear") && on("view_inbox") => view("inbox"),
             "meeting" | "calendar" if on("view_calendar") => view("calendar"),
             "habits" => Some(crate::mission::Opening::Settings),
-            "autopilot" | "autolanded" => Some(crate::mission::Opening::Tabs),
+            "autopilot" | "autolanded" => Some(crate::autopilot::opening()),
             _ => None,
         }
     }

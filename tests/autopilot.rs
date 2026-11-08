@@ -15,7 +15,7 @@ use std::path::Path;
 use std::process::Command;
 use std::time::{Duration, Instant, SystemTime};
 
-use common::{TempDir, TestServer};
+use common::{TempDir, TestClient, TestServer};
 use serde_json::{Value, json};
 
 fn git(dir: &Path, args: &[&str]) {
@@ -58,8 +58,19 @@ fn opened(server: &TestServer) -> Vec<Value> {
         .collect()
 }
 
-#[test]
-fn turning_it_on_opens_a_tab_for_the_notes_next_item_then_the_next_and_says_when_none_is_left() {
+/// A server with a note "Work" in a notes directory of its own, a stand-in
+/// claude and a repository landing straight on its branch, the mode set up
+/// from M-p in a tab there with the counts kept as they were; `more`
+/// settings added to the test's own.
+fn set_up(
+    more: Value,
+) -> (
+    TempDir,
+    std::path::PathBuf,
+    TestServer,
+    TestClient,
+    std::path::PathBuf,
+) {
     let notes = TempDir::new("sbn");
     let note = notes.path().join("Work.md");
     std::fs::write(&note, "# Work\n\n- [ ] First thing\n- [ ] Second thing\n").unwrap();
@@ -77,7 +88,11 @@ fn turning_it_on_opens_a_tab_for_the_notes_next_item_then_the_next_and_says_when
     std::fs::create_dir_all(&config).unwrap();
     // Whether you're at the computer is the desktop's to say, which a test
     // can't be sure of, so it doesn't pause while you're away.
-    let settings = json!({"notifications": false, "tips": false, "github": false, "linear": false, "pause_when_away": false});
+    let mut settings = json!({"notifications": false, "tips": false, "github": false, "linear": false, "pause_when_away": false});
+    settings
+        .as_object_mut()
+        .unwrap()
+        .extend(more.as_object().unwrap().clone());
     std::fs::write(config.join("settings.json"), settings.to_string()).unwrap();
     let bin = server.home.join("bin");
     std::fs::create_dir_all(&bin).unwrap();
@@ -97,8 +112,13 @@ fn turning_it_on_opens_a_tab_for_the_notes_next_item_then_the_next_and_says_when
     git(&repo, &["branch", "cquinones/dev"]);
     let repo = repo.canonicalize().unwrap();
 
-    let mut client = server.attach(120, 40);
+    // Wide enough for the Autopilot view's stage cells beside the sidebar.
+    let cols = if more.get("ux2").is_some() { 170 } else { 120 };
+    let mut client = server.attach(cols, 40);
     client.wait_text("$");
+    if more.get("ux2").is_some() {
+        client.wait_text("M-c  Claude");
+    }
     server.ok(&["new-tab", "-c", repo.to_str().unwrap()]);
     client.type_text("\x1bp");
     client.wait_text("action>");
@@ -148,6 +168,38 @@ fn turning_it_on_opens_a_tab_for_the_notes_next_item_then_the_next_and_says_when
     client.wait_text(
         "Working Work: 3 at a time, up to 5 tabs, in ~/repo, landing on the default branch",
     );
+    (notes, note, server, client, repo)
+}
+
+#[test]
+fn with_ux2_it_has_its_own_view_in_place_of_the_line_leading_the_tabs() {
+    let (_notes, _note, server, mut client, _repo) = set_up(json!({ "ux2": true }));
+    // M-p's command opened mission control on the Autopilot view, its
+    // heading saying what the line said.
+    let screen = client.wait_text("leak check");
+    assert!(
+        screen
+            .iter()
+            .any(|l| l.contains("AUTO Work") && l.contains("of 5 open · asks before landing")),
+        "{screen:#?}"
+    );
+    client.type_text("\x1b");
+    client.wait_for("mission control closed", |s| {
+        !s.iter().any(|l| l.contains("leak check"))
+    });
+    // The Tabs view leads with the cards alone, the Autopilot view among
+    // the views while the mode is on.
+    client.type_text("\x1b ");
+    client.wait_text("Autopilot");
+    std::thread::sleep(Duration::from_millis(300));
+    let screen = client.screen();
+    assert!(!screen.iter().any(|l| l.contains("AUTO ")), "{screen:#?}");
+    drop(server);
+}
+
+#[test]
+fn turning_it_on_opens_a_tab_for_the_notes_next_item_then_the_next_and_says_when_none_is_left() {
+    let (notes, note, server, mut client, repo) = set_up(json!({}));
     client.wait_text("AUTO Work");
 
     let mode: Value = serde_json::from_str(

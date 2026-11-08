@@ -25,6 +25,10 @@ use crate::items::{Item, State, Target};
 use crate::mux::TabId;
 use crate::sidebar::model::TabState;
 
+/// The heading's id: Enter on it opens the menu the Tabs view's line opens
+/// without UX 2.0 (`line::choices`).
+pub const HEADING: &str = "header:autopilot";
+
 /// The stages' names, as the view's heading shows them.
 pub const STAGES: [&str; 8] = [
     "opened",
@@ -169,19 +173,20 @@ fn note_of(r: &Row) -> String {
     format!("tab {} · {what}", r.index)
 }
 
-/// Why it is paused, or nothing while it opens tabs: paused by you, while
-/// you're away, or what it last said (the spend limit passed, the note
-/// lost or with nothing left).
-fn why_paused(s: &Summary, said: &str) -> Option<String> {
+/// Why it is paused, or nothing while it opens tabs: paused by you, or
+/// while you're away; then what it last said (the spend limit passed, the
+/// note lost or with nothing left).
+fn why_paused(s: &Summary, said: &str) -> Vec<String> {
+    let mut out = Vec::new();
     if s.paused {
-        Some("paused by you".into())
+        out.push("paused by you".into());
     } else if s.away {
-        Some("paused while you're away".into())
-    } else if !said.is_empty() {
-        Some(said.to_string())
-    } else {
-        None
+        out.push("paused while you're away".into());
     }
+    if !said.is_empty() {
+        out.push(said.to_string());
+    }
+    out
 }
 
 /// The view's items: the heading, a row per tab, the next items and the
@@ -207,12 +212,16 @@ pub fn items(
             "asks before landing".to_string()
         },
     ]);
-    if let Some(why) = why_paused(s, said) {
-        facts.push(why);
+    if s.ready_only {
+        facts.push("planned items only".into());
     }
+    if s.spend_limit > 0.0 {
+        facts.push(format!("stops at ${} today", s.spend_limit));
+    }
+    facts.extend(why_paused(s, said));
     let pilot = json!({ "paused": s.paused, "lands": s.lands_alone });
     let mut out = vec![
-        Item::new("header:autopilot", s.note.clone())
+        Item::new(HEADING, s.note.clone())
             .detail(facts.join(" · "))
             .data(json!({ "header": true, "count": rows.len(), "summary": true })),
     ];
@@ -342,6 +351,7 @@ mod tests {
             items[0].detail,
             "→ cquinones/dev · 2 of 2 working · 3 of 5 open · lands without asking · paused by you"
         );
+        assert_eq!(items[0].id, HEADING);
         let ids: Vec<&str> = items.iter().map(|i| i.id.as_str()).collect();
         assert_eq!(
             ids,
@@ -353,6 +363,30 @@ mod tests {
                 "header:autopilot:skipped",
                 "skipped:Old"
             ]
+        );
+    }
+
+    #[test]
+    fn the_heading_says_everything_the_tabs_views_line_said() {
+        let s = Summary {
+            note: "Work".into(),
+            busy: 1,
+            open: 1,
+            slots: 2,
+            cap: 4,
+            next: String::new(),
+            paused: false,
+            away: true,
+            ready_only: true,
+            skipped: 0,
+            spend_limit: 20.0,
+            lands_alone: false,
+            target: String::new(),
+        };
+        let items = items(&s, "Nothing left in the note", &[], &[], &[]);
+        assert_eq!(
+            items[0].detail,
+            "1 of 2 working · 1 of 4 open · asks before landing · planned items only · stops at $20 today · paused while you're away · Nothing left in the note"
         );
     }
 }

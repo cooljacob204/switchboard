@@ -1348,6 +1348,12 @@ impl Server {
             m.show_merged = !m.show_merged;
             return;
         }
+        // Autopilot's view's heading opens the menu its line on the Tabs
+        // view opens without UX 2.0.
+        if view.id == ViewId::Autopilot && item.id == crate::autopilot::view::HEADING {
+            self.autopilot_menu(client);
+            return;
+        }
         if views::is_header(&item) {
             return;
         }

@@ -8,6 +8,8 @@
 //! widens it again, cycles when its landed tabs close (the autopilot_close
 //! setting, as Settings changes it), sets it up again, or stops it. Its notification's menu
 //! (`notice_choices`) goes to that line or puts the notification away.
+//! While the mode has its own view (`has_view`, UX 2.0), the line is not
+//! drawn: the view's heading says what it said and opens the same menu.
 
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Span;
@@ -300,7 +302,15 @@ pub fn apply(act: &Act, mode: &mut Mode) -> Option<String> {
 /// Its notification's menu, in mission control's Notifications view.
 pub fn notice_choices() -> Vec<(char, &'static str, Act)> {
     vec![
-        ('o', "Open mission control's Tabs", Act::ToTabs),
+        (
+            'o',
+            if super::has_view() {
+                "Open mission control's Autopilot"
+            } else {
+                "Open mission control's Tabs"
+            },
+            Act::ToTabs,
+        ),
         ('x', "Dismiss it", Act::Dismiss),
     ]
 }
