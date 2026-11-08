@@ -944,10 +944,34 @@ fn pr_cards(
         .map(|item| pr_about(item, side_w, body, theme))
         .unwrap_or_default();
     let cols = cols - side_w;
+    // As many columns as fit 12 wide; with more, the ones around the chosen
+    // PR's, so h and l bring the rest into sight, an arrow on the first and
+    // last heading saying more are off to that side.
+    let fit_n = (cols / 12).clamp(1, columns.len().max(1));
+    let chosen_col = usize::try_from(m.cursor)
+        .ok()
+        .and_then(|c| view.data.items.get(c))
+        .and_then(|item| {
+            columns
+                .iter()
+                .position(|c| item.group.as_deref() == Some(*c))
+        });
+    let start = chosen_col
+        .map_or(0, |c| c.saturating_sub(fit_n - 1))
+        .min(columns.len().saturating_sub(fit_n));
+    let more_left = start > 0;
+    let more_right = start + fit_n < columns.len();
+    let columns = &columns[start..(start + fit_n).min(columns.len())];
     let col_w = (cols / columns.len().max(1)).max(12);
     let w = col_w - 1;
     let mut drawn: Vec<Vec<Vec<Span<'static>>>> = Vec::new();
     for (ci, column) in columns.iter().enumerate() {
+        let arrow_left = if ci == 0 && more_left { " ‹" } else { "" };
+        let arrow_right = if ci + 1 == columns.len() && more_right {
+            " ›"
+        } else {
+            ""
+        };
         let items: Vec<(usize, &Item)> = view
             .data
             .items
@@ -958,8 +982,10 @@ fn pr_cards(
         let mut out = vec![
             fit(
                 vec![
+                    Span::styled(arrow_left, fg(theme.dim)),
                     Span::styled(format!(" {column}"), bold(theme.text)),
                     Span::styled(format!(" {}", items.len()), fg(theme.dim)),
+                    Span::styled(arrow_right, fg(theme.dim)),
                 ],
                 col_w,
                 Style::new(),
@@ -2744,6 +2770,59 @@ mod tests {
             (texts(&l), h)
         };
         assert!(!narrow[0].contains("#2 PR 2"), "{}", narrow[0]);
+    }
+
+    #[test]
+    fn with_ux2_a_narrow_pr_board_shows_the_chosen_pr_s_column() {
+        let item = |n: u32, column: &str| {
+            Item::new(n.to_string(), format!("#{n} PR {n}"))
+                .group(column)
+                .data(serde_json::json!({ "pr": { "number": n } }))
+        };
+        let columns = crate::sources::prboard::columns(true);
+        let last = *columns.last().unwrap();
+        let items = vec![item(1, columns[0]), item(2, last)];
+        let mut m = mission(Vec::new(), vec![list_view(ViewId::Prs, "PRs", items)]);
+        m.snap.rules.ux2 = true;
+        let draw = |m: &Mission| {
+            let (mut l, mut h) = (Vec::new(), Vec::new());
+            pr_cards(
+                &m.snap.views[0],
+                columns,
+                55,
+                20,
+                m,
+                &Theme::DARK,
+                0,
+                &mut l,
+                &mut h,
+            );
+            (texts(&l), h)
+        };
+        // The first PR chosen: the columns from the first, more to the right.
+        m.cursor = 0;
+        let (text, _) = draw(&m);
+        assert!(
+            text[0].contains(columns[0]) && text[0].ends_with("›"),
+            "{}",
+            text[0]
+        );
+        assert!(!text[0].contains(last), "{}", text[0]);
+        // The last column's PR chosen: its column in sight, its card drawn
+        // and clickable inside the board, more to the left.
+        m.cursor = 1;
+        let (text, hits) = draw(&m);
+        assert!(
+            text[0].contains(last) && text[0].contains("‹"),
+            "{}",
+            text[0]
+        );
+        assert!(text.iter().any(|l| l.contains("#2")), "{text:?}");
+        assert!(
+            hits.iter()
+                .any(|h| h.spot == Spot::Index(1) && usize::from(h.x1) < 55),
+            "{hits:?}"
+        );
     }
 
     #[test]
