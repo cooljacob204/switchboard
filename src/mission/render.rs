@@ -2769,6 +2769,7 @@ mod tests {
     fn with_ux2_autopilot_has_a_view_of_its_tabs_stages_then_what_it_opens_next() {
         use crate::autopilot::view::{Row, items};
         let summary = crate::autopilot::Summary {
+            target: String::new(),
             note: "Switchboard".into(),
             busy: 1,
             open: 2,

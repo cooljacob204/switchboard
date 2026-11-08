@@ -193,7 +193,12 @@ pub fn items(
     next: &[String],
     skipped: &[String],
 ) -> Vec<Item> {
-    let mut facts = vec![
+    let mut facts = Vec::new();
+    // Where its tabs land, when not the repository's default branch.
+    if !s.target.is_empty() {
+        facts.push(format!("→ {}", s.target));
+    }
+    facts.extend([
         format!("{} of {} working", s.busy, s.slots),
         format!("{} of {} open", s.open, s.cap),
         if s.lands_alone {
@@ -201,7 +206,7 @@ pub fn items(
         } else {
             "asks before landing".to_string()
         },
-    ];
+    ]);
     if let Some(why) = why_paused(s, said) {
         facts.push(why);
     }
@@ -323,6 +328,7 @@ mod tests {
             skipped: 1,
             spend_limit: 0.0,
             lands_alone: true,
+            target: "cquinones/dev".into(),
         };
         let items = items(
             &s,
@@ -334,7 +340,7 @@ mod tests {
         assert_eq!(items[0].title, "Work");
         assert_eq!(
             items[0].detail,
-            "2 of 2 working · 3 of 5 open · lands without asking · paused by you"
+            "→ cquinones/dev · 2 of 2 working · 3 of 5 open · lands without asking · paused by you"
         );
         let ids: Vec<&str> = items.iter().map(|i| i.id.as_str()).collect();
         assert_eq!(
