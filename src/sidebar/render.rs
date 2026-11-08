@@ -252,6 +252,26 @@ fn fg(c: Color) -> Style {
     Style::new().fg(c)
 }
 
+/// A group's heading color with UX 2.0: the color of the badge its tabs
+/// wear, so what needs you reads yellow and what works blue; the quiet
+/// groups dim.
+fn ux2_group_color(group: Group, theme: &Theme) -> Color {
+    let badge = match group {
+        Group::Needs => Badge::Waiting,
+        Group::Failing => Badge::Failing,
+        Group::Working => Badge::Working,
+        Group::Monitoring => Badge::Monitor,
+        Group::Queued => Badge::Queued,
+        Group::Landing => Badge::Landing,
+        Group::Deploy => Badge::Deploy,
+        Group::Merged => Badge::Merged,
+        Group::Loops => Badge::Scheduled,
+        Group::Later => Badge::Later,
+        Group::Idle | Group::Other => return theme.dim,
+    };
+    badge.color().unwrap_or(theme.dim)
+}
+
 /// An item's mark by its state, as mission control's lists draw it.
 fn item_mark(item: &Item, theme: &Theme) -> Span<'static> {
     match item.state {
@@ -360,21 +380,26 @@ pub fn sidebar_lines(
             .add_modifier(Modifier::BOLD),
     };
     if r.ux2 {
+        // The count, and on the right how to filter; the groups' own
+        // headings say how many need you or work.
         let n = tabs.len();
+        let said = format!("{n} {}", if n == 1 { "tab" } else { "tabs" });
         pill_row
             .put(" ", Style::new())
-            .put(
-                format!("{n} {}", if n == 1 { "tab" } else { "tabs" }),
-                fg(theme.dim),
-            )
-            .put("  ", Style::new());
+            .put(said.clone(), fg(theme.dim));
+        let gap = cols.saturating_sub(width(&said) + 1 + width("/ filter") + 1);
+        if gap > 0 {
+            pill_row
+                .put(" ".repeat(gap), Style::new())
+                .put("/ filter", fg(theme.faint));
+        }
     } else {
         pill_row
             .put(" ", Style::new())
             .put(format!(" {session} "), pill)
             .put("  ", Style::new());
+        counts(&mut pill_row, tabs, r, theme);
     }
-    counts(&mut pill_row, tabs, r, theme);
     head.push(pill_row.fit(cols, None));
     // A / filter being typed, or kept, in the line under it.
     match view.filter {
@@ -396,7 +421,18 @@ pub fn sidebar_lines(
         // at a glance.
         let mut heading = Row::default();
         heading.put(" ", Style::new());
-        if group.group == Group::Failing {
+        if r.ux2 {
+            // UX 2.0: the heading in its group's color, bold, its count at
+            // the right edge.
+            let title = group.group.title().to_uppercase();
+            let n = group.tabs.len().to_string();
+            let color = ux2_group_color(group.group, theme);
+            heading.put(title.clone(), bold(color));
+            let gap = cols.saturating_sub(width(&title) + width(&n) + 2);
+            heading
+                .put(" ".repeat(gap.max(1)), Style::new())
+                .put(n, fg(color));
+        } else if group.group == Group::Failing {
             heading.put(
                 format!("✗ {}", group.group.title().to_uppercase()),
                 bold(Color::Indexed(160)),
@@ -404,7 +440,9 @@ pub fn sidebar_lines(
         } else {
             heading.put(group.group.title().to_uppercase(), fg(theme.dim));
         }
-        heading.put(format!(" {}", group.tabs.len()), fg(theme.faint));
+        if !r.ux2 {
+            heading.put(format!(" {}", group.tabs.len()), fg(theme.faint));
+        }
         lines.push(heading.fit(cols, None));
         owners.push(None);
         let last = group.tabs.len().saturating_sub(1);
@@ -412,6 +450,73 @@ pub fn sidebar_lines(
             let chosen = selected == Some(tab.id);
             if chosen {
                 cursor_at = lines.len();
+            }
+            if r.ux2 {
+                // UX 2.0: two lines a tab. Its state's mark in its color
+                // (no pill), its number in its project's color, its name on
+                // one line; under it, what it is doing. The cursor's row
+                // shaded, with an accent bar at its left.
+                let state = model::badge_state(tab, r);
+                spins |= state.spins();
+                let fill = if chosen {
+                    Some(theme.highlight)
+                } else if view.hover == Some(&Owner::Tab(tab.id)) {
+                    Some(theme.panel)
+                } else {
+                    None
+                };
+                let mark = if state.spins() {
+                    SPINNER[view.frame % SPINNER.len()]
+                } else {
+                    state.look().mark
+                };
+                let mark_style = state.color().map(bold).unwrap_or(fg(theme.faint));
+                let edge = if chosen { "▌" } else { " " };
+                let accent = fg(Color::Indexed(81));
+                let number = tab.index.to_string();
+                let name_style = if chosen || tab.id == view.here {
+                    bold(theme.bright)
+                } else {
+                    fg(theme.text)
+                };
+                let room = cols.saturating_sub(4 + width(&number));
+                let mut first = Row::default();
+                first
+                    .put(edge, accent)
+                    .put(mark, mark_style)
+                    .put(" ", Style::new())
+                    .put(
+                        number,
+                        fg(tab.color.map(Color::from).unwrap_or(theme.faint)),
+                    )
+                    .put(" ", Style::new())
+                    .put(text::cut(&tab.name, room), name_style);
+                lines.push(first.fit(cols, fill));
+                owners.push(Some(tab.id));
+                let mut doing: Vec<String> = model::state_words(tab, r)
+                    .split(" · ")
+                    .filter(|p| !p.is_empty())
+                    .map(str::to_string)
+                    .collect();
+                if let Some(c) = tab.checks.filter(|c| c.fail > 0) {
+                    doing.insert(0, format!("✗{} failing", c.fail));
+                }
+                if let Some(n) = tab.pr.filter(|n| !tab.name.contains(&format!("#{n}"))) {
+                    doing.push(format!("#{n}"));
+                }
+                if !doing.is_empty() {
+                    let mut second = Row::default();
+                    second.put(edge, accent).put("    ", Style::new()).put(
+                        text::cut(&doing.join(" · "), cols.saturating_sub(6)),
+                        fg(theme.dim),
+                    );
+                    lines.push(second.fit(cols, fill));
+                    owners.push(Some(tab.id));
+                }
+                if chosen {
+                    cursor_end = lines.len() - 1;
+                }
+                continue;
             }
             let fill = if chosen {
                 Some(theme.highlight)
@@ -653,6 +758,15 @@ pub fn sidebar_lines(
                 notice_owners.push(Some(n.owner.clone()));
             }
         }
+    }
+
+    // UX 2.0's last row: the keys that start, find and walk tabs.
+    if r.ux2 {
+        let mut hint = Row::default();
+        hint.put(" ", Style::new())
+            .put("M-t new · M-j jump · M-a next", fg(theme.faint));
+        notice_lines.push(hint.fit(cols, None));
+        notice_owners.push(None);
     }
 
     // The list scrolls to keep the chosen tab in sight between the header
@@ -1043,7 +1157,13 @@ mod tests {
         assert_eq!(text[3], " ● 3 new on Slack");
         assert_eq!(out.owners[3], Some(notice.owner.clone()));
         assert_eq!(text[4], "");
-        assert!(text[5..].iter().any(|l| l.contains("work")));
+        assert!(text[0].ends_with("/ filter"), "{:?}", text[0]);
+        // The group's heading with its count at the right edge, then the
+        // tab: the cursor's bar, its mark with no pill, its number, its name.
+        assert!(text[5].ends_with(" 1"), "{:?}", text[5]);
+        assert_eq!(text[6], "▌○ 1 work");
+        assert_eq!(out.owners[6], Some(Owner::Tab(TabId(1))));
+        assert_eq!(text[19], " M-t new · M-j jump · M-a next");
         assert!(
             !text.iter().any(|l| l.contains("═")),
             "none pinned at the bottom"
