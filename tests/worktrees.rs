@@ -1175,6 +1175,11 @@ fn an_item_of_a_note_gets_a_worktree_on_note_its_slug_with_the_item_its_plan_and
         ),
         "its plan, found in a folder"
     );
+    assert!(
+        prompt.contains("compare the item and its plan with the code as it is now")
+            && prompt.contains("without building, landing or ticking it"),
+        "told to check the item is still worth doing first: {prompt}"
+    );
     assert!(prompt.contains("/queue-and-clean"), "told how to land it");
     assert!(
         prompt.contains("as `switchboard landing` says for the repository"),

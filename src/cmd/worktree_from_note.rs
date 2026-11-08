@@ -867,7 +867,7 @@ fn run(given: &Given, note: &str, item: &str) -> Result<ExitCode, String> {
         None => "the default branch".to_string(),
     };
     let mut prompt = format!(
-        "Work on this checklist item from my note \"{title}\" ({}), line {item} there, as written:\n\n<item>\n{block}\n</item>\n\n{plan_words}\
+        "Work on this checklist item from my note \"{title}\" ({}), line {item} there, as written:\n\n<item>\n{block}\n</item>\n\n{plan_words}{CHECK_FIRST}\
          Commit the work on this worktree's branch, following the repository's CLAUDE.md, and don't push it or tick the item in the note. \
          When the work is done, say so in a line, then land it as /queue-and-clean does, which only I can start, so read the file `switchboard skill-path queue-and-clean` prints and follow it: it asks me before pushing, lands it and ticks the item, as `switchboard landing` says for the repository: straight on {onto}, with the steps it gives, or else through a PR it offers to open.",
         file.display()
@@ -885,6 +885,17 @@ fn run(given: &Given, note: &str, item: &str) -> Result<ExitCode, String> {
     }
     Ok(worktree::run_in("claude", &[prompt], &path))
 }
+
+/// What Claude does before building, as `wt`'s prompt has it for a ticket:
+/// an item can sit in a note while the code moves under it. A stale one stops
+/// short of landing, so autopilot's tab, which runs `wtn` too, waits on you
+/// rather than building it.
+const CHECK_FIRST: &str = "Before building, compare the item and its plan with the code as it is now: is it still needed, already done, or worth doing another way? \
+     If it is already done or no longer applies, tell me so with the evidence (the code, or the commit that did it) and stop there, \
+     without building, landing or ticking it, so I decide. \
+     Where the plan gets a detail wrong (a wrong type, the wrong file, a function that turns out to be unused), \
+     build what the code actually needs rather than stopping to ask, then correct the plan so it matches what you built. \
+     Stop and wait for my answer only for a change of scope: doing it another way, widening the work to another file, deleting a caller, changing an API. ";
 
 /// What `skip` holds from `WTN_SKIP`, one first line a line, as the daemon
 /// handed it to wtn-open.zsh.
