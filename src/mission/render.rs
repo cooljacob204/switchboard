@@ -1240,6 +1240,10 @@ fn list(
         stage_rows(view, cols, rows, m, top_row, lines, hits);
         return;
     }
+    if snap.rules.ux2 && view.id == ViewId::Autopilot && cols >= PILOT_AT + 8 * PILOT_STEP {
+        pilot_rows(view, cols, rows, m, top_row, lines, hits);
+        return;
+    }
     let table = view.table();
     let footer = table && !data.footer.is_empty();
     let body = rows.saturating_sub(1 + lines.len());
@@ -1482,6 +1486,8 @@ enum Stage {
     Waiting,
     Queued,
     Failed,
+    /// Waiting on you (Autopilot's view).
+    Asks,
 }
 
 impl Stage {
@@ -1493,6 +1499,19 @@ impl Stage {
             Stage::Waiting => (theme.dim, theme.panel, false),
             Stage::Queued => (Color::Indexed(176), Color::Indexed(53), false),
             Stage::Failed => (Color::Indexed(210), Color::Indexed(52), true),
+            Stage::Asks => (Color::Indexed(221), Color::Indexed(58), true),
+        }
+    }
+
+    /// A stage by the name src/autopilot/view.rs gives its look.
+    fn named(look: &str) -> Stage {
+        match look {
+            "done" => Stage::Done,
+            "running" => Stage::Running,
+            "queued" => Stage::Queued,
+            "failed" => Stage::Failed,
+            "asks" => Stage::Asks,
+            _ => Stage::Waiting,
         }
     }
 }
@@ -1730,6 +1749,136 @@ fn stage_rows(
             .put(" ", Style::new())
             .put(text::cut(&item.detail, name_w), fg(theme.dim));
         lines.push(under.line(cols, fill));
+    }
+}
+
+/// UX 2.0's Autopilot view: where its eight stage cells start, how wide
+/// each is and how far apart they start, narrower than Landing's so the
+/// eight fit the main area beside the sidebar.
+const PILOT_AT: usize = 34;
+const PILOT_WIDTH: usize = 10;
+const PILOT_STEP: usize = 11;
+
+/// UX 2.0's Autopilot view (src/autopilot/view.rs): the note bold with its
+/// slots, cap, landing and pause dim beside it, the stages' names, each tab
+/// it opened two lines (its item bold with a cell per stage, then a dim
+/// note of where it is), then the next items and the skipped ones under
+/// headings of their own, a line each.
+fn pilot_rows(
+    view: &View,
+    cols: usize,
+    rows: usize,
+    m: &Mission,
+    top_row: usize,
+    lines: &mut Vec<Line>,
+    hits: &mut Vec<HitBox>,
+) {
+    let theme = &m.snap.theme;
+    let items = &view.data.items;
+    let room = (rows.saturating_sub(3 + lines.len()) / 2).max(1);
+    let cursor = m.cursor.max(0) as usize;
+    let first = (cursor + 1).saturating_sub(room);
+    let name_w = PILOT_AT.saturating_sub(4);
+    for (index, item) in items.iter().enumerate() {
+        let summary = item
+            .data
+            .get("summary")
+            .and_then(serde_json::Value::as_bool)
+            == Some(true);
+        if index < first && !summary {
+            continue;
+        }
+        let chosen = index == cursor && m.cursor >= 0;
+        let fill = if chosen {
+            Some(theme.highlight)
+        } else if m.hover == Some(Spot::Index(index as isize)) {
+            Some(theme.panel)
+        } else {
+            None
+        };
+        let mut hit = |lines: &Vec<Line>| {
+            hits.push(HitBox {
+                y: (top_row + lines.len()) as u16,
+                x0: 0,
+                x1: cols.saturating_sub(1) as u16,
+                spot: Spot::Index(index as isize),
+            });
+        };
+        if summary {
+            let mut row = Row::default();
+            row.put(" AUTO ", bold(ACCENT))
+                .put(item.title.clone(), bold(theme.bright))
+                .put(format!("   {}", item.detail), fg(theme.dim));
+            lines.push(row.line(cols, None));
+            let mut heads = Row::default();
+            heads.put(text::pad(" item", PILOT_AT), fg(theme.dim));
+            for name in crate::autopilot::view::STAGES {
+                heads
+                    .put(centered(name, PILOT_WIDTH), fg(theme.dim))
+                    .put(" ", Style::new());
+            }
+            lines.push(heads.line(cols, None));
+            continue;
+        }
+        if views::is_header(item) {
+            let count = item
+                .data
+                .get("count")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(0);
+            let mut row = Row::default();
+            row.put(format!(" {}", item.title), bold(theme.bright))
+                .put(format!("   {count}"), fg(theme.dim));
+            lines.push(row.line(cols, None));
+            continue;
+        }
+        let pointer = if chosen { "▌" } else { " " };
+        let stages = item
+            .data
+            .pointer("/pilot/stages")
+            .and_then(serde_json::Value::as_array);
+        let Some(stages) = stages else {
+            hit(lines);
+            let mut row = Row::default();
+            row.put(pointer, fg(ACCENT))
+                .put(" ", Style::new())
+                .put(item.title.clone(), fg(theme.text))
+                .put("  ", Style::new())
+                .put(item.detail.clone(), fg(theme.dim));
+            lines.push(row.line(cols, fill));
+            continue;
+        };
+        hit(lines);
+        let mut top = Row::default();
+        top.put(pointer, fg(ACCENT)).put(" ", Style::new()).put(
+            text::pad(&text::cut(&item.title, name_w), PILOT_AT - 2),
+            bold(theme.bright),
+        );
+        for cell in stages {
+            let look = cell
+                .get(0)
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("");
+            let words = cell
+                .get(1)
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("");
+            let (color, bg, strong) = Stage::named(look).look(theme);
+            let style = if strong { bold(color) } else { fg(color) }.bg(bg);
+            top.put(centered(words, PILOT_WIDTH), style)
+                .put(" ", Style::new());
+        }
+        lines.push(top.line(cols, fill));
+        hit(lines);
+        let mut under = Row::default();
+        under
+            .put(pointer, fg(ACCENT))
+            .put(" ", Style::new())
+            .put(text::cut(&item.detail, name_w), fg(theme.dim));
+        lines.push(under.line(cols, fill));
+        if lines.len() + 2 > rows {
+            break;
+        }
     }
 }
 
@@ -2613,6 +2762,100 @@ mod tests {
         );
         assert!(text[2].contains("1 build") && text[2].contains("93.0"));
         assert!(text[10].contains("All tabs"), "{text:#?}");
+    }
+
+    #[test]
+    fn with_ux2_autopilot_has_a_view_of_its_tabs_stages_then_what_it_opens_next() {
+        use crate::autopilot::view::{Row, items};
+        let summary = crate::autopilot::Summary {
+            note: "Switchboard".into(),
+            busy: 1,
+            open: 2,
+            slots: 2,
+            cap: 5,
+            next: "Third".into(),
+            paused: false,
+            away: false,
+            ready_only: false,
+            skipped: 1,
+            spend_limit: 0.0,
+            lands_alone: true,
+        };
+        let row = |tab: u32, item: &str, state: TabState| Row {
+            tab: TabId(tab),
+            index: tab as usize,
+            item: item.into(),
+            state,
+            was_in: true,
+            loop_skill: None,
+            phase: None,
+            landing: None,
+            left: false,
+            autoland: false,
+        };
+        let mut landing = row(3, "Give notes stable IDs", TabState::Working);
+        landing.loop_skill = Some("queue".into());
+        landing.phase = Some("pushing".into());
+        landing.landing = Some(serde_json::json!({ "holding": true, "phase": "pushing" }));
+        let rows = vec![landing, row(4, "Port the PR board", TabState::Waiting)];
+        let list = items(
+            &summary,
+            "",
+            &rows,
+            &["Third".into(), "Fourth".into()],
+            &["Old idea".into()],
+        );
+        let mut m = mission(
+            Vec::new(),
+            vec![list_view(ViewId::Autopilot, "Autopilot", list)],
+        );
+        m.snap.rules.ux2 = true;
+        m.view = 1;
+        m.cursor = 1;
+        let (lines, _) = screen(&m, 125, 30);
+        let text = texts(&lines);
+        let at = text
+            .iter()
+            .position(|l| l.contains("AUTO Switchboard"))
+            .unwrap();
+        assert!(
+            text[at].contains("1 of 2 working · 2 of 5 open · lands without asking"),
+            "{}",
+            text[at]
+        );
+        let heads = &text[at + 1];
+        assert!(
+            heads.contains("opened") && heads.contains("leak check") && heads.contains("closed"),
+            "{heads}"
+        );
+        let first = &text[at + 2];
+        assert!(
+            first.contains("Give notes stable IDs")
+                && first.contains("✓ tab 3")
+                && first.contains("✓ held")
+                && first.contains("pushing…"),
+            "{first}"
+        );
+        assert!(text[at + 3].contains("tab 3 · pushing"), "{}", text[at + 3]);
+        // Waiting on you is a yellow cell.
+        let asks = lines[at + 4]
+            .spans
+            .iter()
+            .find(|s| s.content.contains("asks you"))
+            .unwrap();
+        assert_eq!(asks.style.bg, Some(Color::Indexed(58)));
+        let next = text
+            .iter()
+            .position(|l| l.contains("Next, in the order"))
+            .unwrap();
+        assert!(text[next + 1].contains("1. Third"), "{}", text[next + 1]);
+        assert!(text[next + 2].contains("2. Fourth"), "{}", text[next + 2]);
+        assert!(text[next + 3].contains("Skipped"), "{}", text[next + 3]);
+        assert!(
+            text[next + 4].contains("Old idea") && text[next + 4].contains("skipped by you"),
+            "{}",
+            text[next + 4]
+        );
     }
 
     #[test]

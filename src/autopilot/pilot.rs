@@ -104,7 +104,13 @@ pub struct Next {
     /// What it was read for: the note, its time, the items skipped and the
     /// kind taken.
     pub key: String,
+    /// The items it will open, in that order, for its view (the first is
+    /// `text`), at most `QUEUE_SHOWN`.
+    pub queue: Vec<String>,
 }
+
+/// The most items of the queue its view lists.
+pub const QUEUE_SHOWN: usize = 8;
 
 /// A mark a check sets on one of its tabs, or what it does to one.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -147,6 +153,12 @@ impl Job {
     /// The first item the queue gives, if any; `state` is the state
     /// directory, whose claims file says which items wtn started lately.
     pub fn first(&self, notes: &Path, state: &Path) -> Result<Option<Item>, String> {
+        self.items(notes, state)
+            .map(|items| items.into_iter().next())
+    }
+
+    /// Every item the queue gives, in the order it opens them.
+    pub fn items(&self, notes: &Path, state: &Path) -> Result<Vec<Item>, String> {
         queue(
             notes,
             &self.repo,
@@ -155,7 +167,6 @@ impl Job {
             self.ready_only,
             &crate::cmd::worktree_from_note::claims_in(state),
         )
-        .map(|items| items.into_iter().next())
     }
 
     /// The look for the next item to open: nothing once today's spend has
@@ -726,6 +737,7 @@ impl Pilot {
             text,
             at: now_ms,
             key,
+            queue: Vec::new(),
         };
     }
 

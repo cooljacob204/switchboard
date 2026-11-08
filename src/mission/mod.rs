@@ -194,6 +194,8 @@ pub struct Mission {
     /// The Landing view kept while this client has it in front, or opens
     /// on it, with nothing landing.
     pub keep_landing: bool,
+    /// Autopilot's view kept the same way, with the mode off.
+    pub keep_autopilot: bool,
 }
 
 impl Mission {
@@ -216,6 +218,7 @@ impl Mission {
             came: None,
             spun_at: 0,
             keep_landing: false,
+            keep_autopilot: false,
         }
     }
 

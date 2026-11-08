@@ -192,6 +192,76 @@ fn choice(key: char, label: impl Into<String>, act: Do) -> Choice {
     }
 }
 
+/// A row's menu in Autopilot's view (src/autopilot/view.rs): its tab, its
+/// item skipped (an item to open next too), the skipped ones taken again,
+/// then what changes the whole mode, as its line's menu does: pause or
+/// resume, land without asking or not, stop.
+fn pilot_choices(item: &Item, ctx: &Ctx<'_>) -> Vec<Choice> {
+    use crate::autopilot::Act;
+    let mut out = Vec::new();
+    let tab = item
+        .data
+        .pointer("/pilot/tab")
+        .and_then(Value::as_str)
+        .and_then(|t| ctx.tabs.iter().find(|m| m.id.to_string() == t));
+    if let Some(t) = tab {
+        out.push(choice(
+            'g',
+            format!("Go to tab {}", t.index),
+            Do::GoTo(t.id),
+        ));
+    }
+    let skip = item
+        .data
+        .pointer("/pilot/item")
+        .or_else(|| item.data.get("next"))
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty());
+    if let Some(text) = skip {
+        out.push(choice(
+            's',
+            format!("Skip its item: {text}"),
+            Do::Autopilot(Act::Skip(text.to_string())),
+        ));
+    }
+    if item.data.get("skipped").is_some() {
+        out.push(choice(
+            'c',
+            "Take the skipped items again",
+            Do::Autopilot(Act::Unskip),
+        ));
+    }
+    let flag = |k: &str| item.data.pointer(k).and_then(Value::as_bool) == Some(true);
+    out.push(if flag("/mode/paused") {
+        choice('r', "Resume", Do::Autopilot(Act::Resume))
+    } else {
+        choice(
+            'p',
+            "Pause: open no more tabs for now",
+            Do::Autopilot(Act::Pause),
+        )
+    });
+    out.push(if flag("/mode/lands") {
+        choice(
+            'w',
+            "Ask before landing",
+            Do::Autopilot(Act::AskBeforeLanding),
+        )
+    } else {
+        choice(
+            'w',
+            "Land without asking",
+            Do::Autopilot(Act::LandWithoutAsking),
+        )
+    });
+    out.push(choice(
+        'x',
+        "Stop working the note",
+        Do::Autopilot(Act::Stop),
+    ));
+    out
+}
+
 /// A tab's menu. `waiter` is its place in the landing queue when it waits
 /// there; `all` every tab, for closing the merged ones together; `title`
 /// the tab_title setting, for showing its whole title.
@@ -556,6 +626,7 @@ pub fn item_choices(view: &ViewId, item: &Item, shown: &[Item], ctx: &Ctx<'_>) -
                 out.push(choice('y', "Copy its link", Do::Copy(url)));
             }
         }
+        ViewId::Autopilot => return pilot_choices(item, ctx),
         ViewId::Landing if item.data.get("landing").is_some_and(Value::is_object) => {
             // A worktree landing on its default branch, or waiting to.
             let l = &item.data["landing"];

@@ -58,6 +58,7 @@
 //! - `line`: its line in mission control and the menu Enter opens on it.
 //! - `landed`: the landings its tabs made without asking, for the
 //!   notifications.
+//! - `view`: its own view in mission control, with UX 2.0 on.
 //! - `serve`: the server's side: setting it up, the check on every tick,
 //!   opening the tabs, the notifications.
 
@@ -67,6 +68,7 @@ pub mod mode;
 pub mod pilot;
 pub mod place;
 mod serve;
+pub mod view;
 
 pub use line::{Act, Summary};
 pub use mode::Mode;
@@ -124,7 +126,12 @@ impl Command {
 pub enum AutopilotEvent {
     /// The item it would take next, read again for mission control's line,
     /// under the key it was read for.
-    Next { key: String, text: String },
+    Next {
+        key: String,
+        text: String,
+        /// The items it will open, in order, for its view.
+        queue: Vec<String>,
+    },
     /// What looking for the next item to open found, for a note last
     /// changed at `mtime` (ms).
     Found { found: pilot::Found, mtime: i64 },

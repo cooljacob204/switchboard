@@ -206,6 +206,7 @@ impl Server {
         m.cursor = 0;
         // The Landing view opens even with nothing landing, saying so.
         m.keep_landing = how == Opening::View("landing".into());
+        m.keep_autopilot = how == Opening::View("autopilot".into());
         if let Opening::Picker(scope) = how {
             m.scope = Some(scope);
             m.picker = true;
@@ -389,7 +390,9 @@ impl Server {
         // opening on it, so it doesn't vanish under you once the last
         // landing ends.
         let keep_landing = m.keep_landing || m.current().is_some_and(|v| v.id == ViewId::Landing);
-        let all = self.mission_views(m.scope.is_some(), keep_landing);
+        let keep_autopilot =
+            m.keep_autopilot || m.current().is_some_and(|v| v.id == ViewId::Autopilot);
+        let all = self.mission_views(m.scope.is_some(), keep_landing, keep_autopilot);
         let views: Vec<View> = all
             .iter()
             .map(|v| views::shown(v, &text, m.scope, m.show_merged))
@@ -449,6 +452,7 @@ impl Server {
             m.view = 0;
         }
         m.keep_landing = m.current().is_some_and(|v| v.id == ViewId::Landing);
+        m.keep_autopilot = m.current().is_some_and(|v| v.id == ViewId::Autopilot);
         let count = match m.current() {
             Some(v) => v.data.items.len(),
             None => m.snap.tabs.len(),
@@ -519,8 +523,13 @@ impl Server {
     /// Every view after the tabs, each only while its setting is on (the
     /// Work map for M-j's and M-o's pickers whatever its setting), Landing
     /// only while something lands or `keep_landing` (the client has it in
-    /// front).
-    fn mission_views(&mut self, picker: bool, keep_landing: bool) -> Vec<View> {
+    /// front), Autopilot only while it is on or `keep_autopilot`.
+    fn mission_views(
+        &mut self,
+        picker: bool,
+        keep_landing: bool,
+        keep_autopilot: bool,
+    ) -> Vec<View> {
         let on = settings::is_on;
         let mut out: Vec<View> = Vec::new();
         let view = |id: ViewId, title: &str, data: ViewData, loaded: bool| View {
@@ -586,8 +595,21 @@ impl Server {
             (ViewId::Inbox, crate::sources::INBOX, "Inbox"),
         ] {
             if id == ViewId::Landing {
-                if let Some(d) = self.landing_view(keep_landing) {
+                let landing = self.landing_view(keep_landing);
+                let landing_items = landing.as_ref().map(|d| d.items.clone());
+                if let Some(d) = landing {
                     out.push(view(id, title, d, true));
+                }
+                // Autopilot's own view, with UX 2.0 on, after Landing.
+                if let Some(items) =
+                    self.autopilot_view(keep_autopilot, landing_items.as_deref().unwrap_or(&[]))
+                {
+                    let data = ViewData {
+                        items,
+                        at: Some(1),
+                        ..ViewData::default()
+                    };
+                    out.push(view(ViewId::Autopilot, "Autopilot", data, true));
                 }
                 continue;
             }

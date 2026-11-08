@@ -464,6 +464,69 @@ impl Server {
             .then(|| self.autopilot.pilot.summary(mode, self.away_now()))
     }
 
+    /// Its own view in mission control (`view`), with UX 2.0 and the
+    /// view_autopilot setting on: while the mode is on, or `keep` (a client
+    /// has it in front). `landing` is the Landing view's items, whose
+    /// entries say where each tab's worktree is in its landing queue. Built
+    /// from what the server holds, reading no file.
+    pub fn autopilot_view(
+        &self,
+        keep: bool,
+        landing: &[crate::items::Item],
+    ) -> Option<Vec<crate::items::Item>> {
+        let on = settings::is_on;
+        if !(on("ux2") && on("view_autopilot") && on("autopilot")) {
+            return None;
+        }
+        let mode = &self.autopilot.mode;
+        if !(mode.on || keep) {
+            return None;
+        }
+        let marked = |opts: &std::collections::BTreeMap<String, String>, name: &str| {
+            opts.get(name).is_some_and(|v| !v.is_empty() && v != "0")
+        };
+        let mut rows = Vec::new();
+        for model in self.sidebar_all_tabs() {
+            let Some(tab) = self.tabs.get(&model.id) else {
+                continue;
+            };
+            if !marked(&tab.opts, OPENED) {
+                continue;
+            }
+            let id = model.id.to_string();
+            let landing = landing.iter().find_map(|i| {
+                let l = i.data.get("landing")?;
+                (l.get("tab").and_then(serde_json::Value::as_str) == Some(id.as_str()))
+                    .then(|| l.clone())
+            });
+            rows.push(super::view::Row {
+                tab: model.id,
+                index: model.index,
+                item: tab
+                    .opts
+                    .get(ITEM)
+                    .cloned()
+                    .unwrap_or_else(|| model.name.clone()),
+                state: model.state,
+                was_in: marked(&tab.opts, IN),
+                loop_skill: model.loop_skill.clone(),
+                phase: model.phase.clone(),
+                landing,
+                left: marked(&tab.opts, LEFT) || model.autopilot_landed,
+                autoland: model.autopilot_autoland,
+            });
+        }
+        let summary = self.autopilot.pilot.summary(mode, self.away_now());
+        let skipped: Vec<String> = mode.skipped_here().map(str::to_string).collect();
+        Some(super::view::items(
+            &summary,
+            &mode.said,
+            &rows,
+            &self.autopilot.pilot.next.queue,
+            &skipped,
+        ))
+    }
+
     // ── The check ───────────────────────────────────────────────────────────
 
     /// Every tick: the mode read again, its tabs marked, and the next item
@@ -897,15 +960,18 @@ impl Server {
         let tx = self.tx.clone();
         let state = paths::state_dir();
         tokio::task::spawn_blocking(move || {
-            let text = job
-                .first(&notes, &state)
-                .ok()
-                .flatten()
+            let queue: Vec<String> = job
+                .items(&notes, &state)
+                .unwrap_or_default()
+                .into_iter()
+                .take(super::pilot::QUEUE_SHOWN)
                 .map(|i| i.text)
-                .unwrap_or_default();
+                .collect();
+            let text = queue.first().cloned().unwrap_or_default();
             let _ = tx.send(Event::Autopilot(AutopilotEvent::Next {
                 key: job.key,
                 text,
+                queue,
             }));
         });
     }
@@ -930,9 +996,11 @@ impl Server {
     /// What the looks off the task found.
     pub fn autopilot_event(&mut self, event: AutopilotEvent) {
         match event {
-            AutopilotEvent::Next { key, text } => {
-                let changed = self.autopilot.pilot.next.text != text;
+            AutopilotEvent::Next { key, text, queue } => {
+                let changed = self.autopilot.pilot.next.text != text
+                    || self.autopilot.pilot.next.queue != queue;
                 self.autopilot.pilot.next_read(key, text, util::now_ms());
+                self.autopilot.pilot.next.queue = queue;
                 if changed {
                     self.autopilot_redraw();
                 }
