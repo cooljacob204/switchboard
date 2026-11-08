@@ -1090,3 +1090,38 @@ fn renaming_a_new_empty_note_titles_its_first_line_and_a_pasted_id_is_never_styl
     assert_eq!(doc.line(1), "- [ ] one");
     assert_eq!(doc.line(2), line, "the ID line isn't made a checklist item");
 }
+
+// UX 2.0: the background look's tabs matched to the items they are for.
+#[test]
+fn the_server_tabs_on_items_are_matched_by_title_autopilot_item_or_wtn_item() {
+    let list = serde_json::json!({ "sessions": [{ "tabs": [
+        { "index": 3, "agent": "working", "options": { "@tab_title": "show uncommitted changes" },
+          "panes": [{ "agent": { "state": "working", "phase": "review round 1" } }] },
+        { "index": 2, "agent": "waiting", "options": { "@autopilot_item": "stable IDs" },
+          "panes": [{ "agent": { "state": "waiting", "wait": "git push" } }] },
+        { "index": 4, "agent": "working", "options": {}, "path": "/repo/wt", "panes": [] },
+        { "index": 5, "agent": "done", "options": { "@tab_title": "finished" }, "panes": [] },
+        { "index": 6, "agent": null, "options": { "@tab_title": "idle" }, "panes": [] },
+    ]}]});
+    let got = item_tabs_of(&list, |dir| {
+        (dir == "/repo/wt").then(|| "from git".to_string())
+    });
+    assert_eq!(
+        got["show uncommitted changes"],
+        render::ItemTab {
+            index: 3,
+            waits: false,
+            detail: "review round 1".into()
+        }
+    );
+    assert_eq!(
+        got["stable IDs"],
+        render::ItemTab {
+            index: 2,
+            waits: true,
+            detail: "git push".into()
+        }
+    );
+    assert_eq!(got["from git"].index, 4);
+    assert_eq!(got.len(), 3, "a finished or idle tab is no chip");
+}

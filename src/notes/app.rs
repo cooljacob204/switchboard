@@ -88,6 +88,8 @@ pub enum Msg {
     Squashed(Result<String, String>),
     /// A request on the socket, and where its reply goes.
     Socket(Request, Sender<String>),
+    /// UX 2.0: the tabs on notes' items, from the background look.
+    ItemTabs(HashMap<String, render::ItemTab>),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -395,6 +397,10 @@ const MESSAGE_FOR: Duration = Duration::from_secs(5);
 pub struct App {
     pub store: Store,
     pub opts: Options,
+    /// UX 2.0: the tabs on the note's items, by each item's first line, as
+    /// the background look (`look_at_tabs`) last found them; drawing reads
+    /// only this.
+    pub item_tabs: HashMap<String, render::ItemTab>,
     look: Look,
     cols: u16,
     rows: u16,
@@ -510,6 +516,7 @@ impl App {
             replaying: false,
             save_due: None,
             watch_due: None,
+            item_tabs: HashMap::new(),
             squash_pid: None,
             squash_paths: Vec::new(),
             squash_cancelled: false,
@@ -1667,6 +1674,7 @@ impl App {
                 let reply = self.request(request);
                 let _ = back.send(reply);
             }
+            Msg::ItemTabs(tabs) => self.item_tabs = tabs,
         }
     }
 
@@ -2662,6 +2670,91 @@ extern "C" fn on_signal(_: libc::c_int) {
     ENDED.store(true, Ordering::Relaxed);
 }
 
+/// How often UX 2.0's background look asks the server for its tabs.
+const TABS_EVERY: Duration = Duration::from_secs(3);
+
+/// UX 2.0's background look, off the drawing path: every few seconds while
+/// the app runs, the server's tabs (`switchboard list` over its socket),
+/// matched to the items they work on, handed to the app only when they
+/// change. Ends with the app.
+fn look_at_tabs(tx: Sender<Msg>) {
+    std::thread::spawn(move || {
+        let mut last = None;
+        loop {
+            let found = crate::mux::socket::ask_ok(&["list"])
+                .ok()
+                .and_then(|out| serde_json::from_str::<serde_json::Value>(&out).ok())
+                .map(|list| item_tabs_of(&list, wtn_item_of))
+                .unwrap_or_default();
+            if last.as_ref() != Some(&found) {
+                last = Some(found.clone());
+                if tx.send(Msg::ItemTabs(found)).is_err() {
+                    return;
+                }
+            }
+            std::thread::sleep(TABS_EVERY);
+        }
+    });
+}
+
+/// The item a directory's branch is for, from its repository's git config
+/// read as a file (`branch.<branch>.wtnItem`), for the background look.
+fn wtn_item_of(dir: &str) -> Option<String> {
+    let place = crate::tabs::git::locate(Path::new(dir)).filter(|p| p.on_branch())?;
+    let config = std::fs::read_to_string(place.common_dir.join("config")).ok()?;
+    crate::tabs::title::wtn_item(&config, &place.branch)
+}
+
+/// The tabs working on an item or waiting on you, by the item's first
+/// line, from `switchboard list`'s JSON: the item from the tab's
+/// `@tab_title` or `@autopilot_item`, else from `wtn_item` on its
+/// directory; working with its Claude's phase, or waiting with what it
+/// waits on.
+fn item_tabs_of(
+    list: &serde_json::Value,
+    wtn_item: impl Fn(&str) -> Option<String>,
+) -> HashMap<String, render::ItemTab> {
+    let mut out = HashMap::new();
+    let sessions = list["sessions"].as_array().into_iter().flatten();
+    for tab in sessions.flat_map(|s| s["tabs"].as_array().into_iter().flatten()) {
+        let waits = match tab["agent"].as_str() {
+            Some("waiting") => true,
+            Some("working") => false,
+            _ => continue,
+        };
+        let opt = |key: &str| {
+            tab["options"][key]
+                .as_str()
+                .filter(|v| !v.is_empty())
+                .map(str::to_string)
+        };
+        let Some(item) = opt("@tab_title")
+            .or_else(|| opt("@autopilot_item"))
+            .or_else(|| tab["path"].as_str().and_then(&wtn_item))
+        else {
+            continue;
+        };
+        let state = if waits { "waiting" } else { "working" };
+        let detail = tab["panes"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|p| &p["agent"])
+            .find(|a| a["state"].as_str() == Some(state))
+            .and_then(|a| a[if waits { "wait" } else { "phase" }].as_str())
+            .unwrap_or("")
+            .to_string();
+        let index = tab["index"].as_u64().unwrap_or(0) as usize;
+        out.entry(item.trim().to_string())
+            .or_insert(render::ItemTab {
+                index,
+                waits,
+                detail,
+            });
+    }
+    out
+}
+
 /// Marks the pane Notes runs in, or lets the mark go: `@notes_cmd_keys`
 /// for the workspace to pass it easy mode's Cmd keys, `@allow_passthrough`
 /// to pass its pictures' graphics commands on to the terminal, as bin/notes
@@ -2749,6 +2842,9 @@ pub fn run(store: Store) -> ExitCode {
                 }
             }
         });
+    }
+    if app.opts.ux2 {
+        look_at_tabs(tx.clone());
     }
     let mut screen = Screen::default();
     let mut size = (cols, rows);
