@@ -15,7 +15,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 fn main() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/skills");
+    let root = manifest_dir().join("assets/skills");
     println!("cargo:rerun-if-changed=assets/skills");
     let mut files = Vec::new();
     walk(&root, &mut files);
@@ -41,6 +41,15 @@ fn main() {
     commit();
 }
 
+/// The checkout being built, read as the build script runs rather than
+/// compiled into it (`env!`): a target directory shared by several
+/// worktrees reuses one compiled build script for all of them, which would
+/// otherwise read the skills and git of whichever worktree compiled it first,
+/// gone once that worktree is removed.
+fn manifest_dir() -> PathBuf {
+    PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").expect("cargo sets CARGO_MANIFEST_DIR"))
+}
+
 /// The commit the binary is built from, for `switchboard --version`, as
 /// `SWITCHBOARD_COMMIT`: the variable itself when the build is given one (a
 /// build from a source archive, which has no `.git`), else git's short hash,
@@ -59,7 +68,7 @@ fn commit() {
     let git = |args: &[&str]| {
         std::process::Command::new("git")
             .args(args)
-            .current_dir(env!("CARGO_MANIFEST_DIR"))
+            .current_dir(manifest_dir())
             .output()
             .ok()
             .filter(|o| o.status.success())
@@ -75,7 +84,7 @@ fn commit() {
     .into_iter()
     .flatten()
     {
-        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(watched);
+        let path = manifest_dir().join(watched);
         if path.exists() {
             println!("cargo:rerun-if-changed={}", path.display());
         }
