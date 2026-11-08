@@ -215,10 +215,24 @@ impl Server {
             .iter()
             .filter_map(|(p, r)| Some((*p, r.work.interrupted_at?)))
             .collect();
+        // A question asked since the session started, still unanswered.
+        let asks: Vec<(PaneId, String, i64)> = reads
+            .iter()
+            .filter_map(|(p, r)| {
+                let (question, at) = r.turn.as_ref()?.asks.clone()?;
+                let started = r.session.as_ref()?.started_at.unwrap_or(0);
+                (at >= started).then_some((*p, question, at))
+            })
+            .collect();
         let changed = reads != self.sidebar.panes;
         self.sidebar.panes = reads;
         self.sidebar.stale = false;
         self.sidebar_hand_back(&interrupted);
+        for (pane, question, at) in asks {
+            if self.agent_asked(pane, at, &question) {
+                self.dirty_sidebars();
+            }
+        }
         if changed {
             self.dirty_sidebars();
         }

@@ -86,6 +86,9 @@ impl Server {
         } else {
             self.agents.apply(pane, &hook, now, front)
         };
+        if hook.agent.is_empty() {
+            self.agents.heard(pane, util::now_ms());
+        }
         if changed {
             // A pane that has gone back to a shell keeps no state, so a
             // session that died without SessionEnd leaves no mark behind.
@@ -473,6 +476,27 @@ impl Server {
         if let Some(tab) = self.panes.get(&pane).map(|s| s.tab) {
             self.redraw_tab(tab);
         }
+        true
+    }
+
+    /// A question the pane's transcript shows unanswered, asked at `at`
+    /// (ms), read by the sidebar (`claude::Turn::asks`): the pane waits on
+    /// it, unless the conversation's own hooks have said more since
+    /// (`Agents::asked`). For a question whose hook never reached the
+    /// server, which would leave the tab looking busy while Claude waits on
+    /// you. Gives whether it changed.
+    pub fn agent_asked(&mut self, pane: PaneId, at: i64, question: &str) -> bool {
+        let Some(tab) = self.panes.get(&pane).map(|s| s.tab) else {
+            return false;
+        };
+        let front = self.tab_in_front(tab);
+        if !self
+            .agents
+            .asked(pane, at, question, util::now_secs(), front)
+        {
+            return false;
+        }
+        self.redraw_tab(tab);
         true
     }
 
