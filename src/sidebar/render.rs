@@ -66,6 +66,9 @@ pub struct Notice {
     pub owner: Owner,
     pub title: String,
     pub detail: String,
+    /// When the newest of its kind came, in seconds since the epoch, shown
+    /// as how long ago with UX 2.0 on; none for a kind that keeps no time.
+    pub time: Option<i64>,
 }
 
 /// A plugin's short list under the tabs (its `sidebar` count of items, from
@@ -711,11 +714,21 @@ pub fn sidebar_lines(
             } else {
                 None
             };
+            // How long ago it came at the right edge, dim, the title cut
+            // so it always fits.
+            let when = text::ago(n.time, r.now_secs());
+            let room = cols.saturating_sub(4 + if when.is_empty() { 0 } else { width(&when) + 1 });
+            let title = text::cut(&n.title, room);
+            let gap = cols.saturating_sub(4 + width(&title) + width(&when));
             let mut row = Row::default();
             row.put(if fill.is_some() { "▌" } else { " " }, fg(YELLOW))
                 .put("●", fg(YELLOW))
                 .put(" ", Style::new())
-                .put(n.title.clone(), fg(theme.text));
+                .put(title, fg(theme.text));
+            if !when.is_empty() {
+                row.put(" ".repeat(gap), Style::new())
+                    .put(when, fg(theme.dim));
+            }
             head.push(row.fit(cols, fill));
             top_owners.push(Some(n.owner.clone()));
         }
@@ -1132,6 +1145,7 @@ mod tests {
             },
             title: "3 new on Slack".into(),
             detail: "Ada · #general".into(),
+            time: Some(rules().now_secs() - 720),
         };
         let r = Rules {
             ux2: true,
@@ -1154,8 +1168,39 @@ mod tests {
         assert!(text[0].starts_with(" 1 tab"), "{:?}", text[0]);
         assert!(!text[0].contains(" s "), "no session's name: {:?}", text[0]);
         assert_eq!(text[2], " NOTIFICATIONS 1");
-        assert_eq!(text[3], " ● 3 new on Slack");
+        // How long ago it came, dim at the right edge.
+        assert_eq!(text[3], format!(" ● 3 new on Slack{}12m", " ".repeat(19)));
+        assert_eq!(out.lines[3].spans.last().unwrap().content, " ");
+        let when = &out.lines[3].spans[out.lines[3].spans.len() - 2];
+        assert_eq!(when.content, "12m");
+        assert_eq!(when.style.fg, Some(Theme::DARK.dim));
         assert_eq!(out.owners[3], Some(notice.owner.clone()));
+        // A long title is cut so the time still fits; none kept, none shown.
+        let long = |time| Notice {
+            title: "Landed the stable note IDs and the claims by them".into(),
+            time,
+            ..notice.clone()
+        };
+        let at = |n: &Notice| {
+            texts(&sidebar_lines(
+                std::slice::from_ref(&t),
+                None,
+                std::slice::from_ref(n),
+                &[],
+                "s",
+                40,
+                20,
+                &view(1),
+                &r,
+                &Theme::DARK,
+            ))[3]
+                .clone()
+        };
+        assert_eq!(
+            at(&long(Some(rules().now_secs() - 3600))),
+            " ● Landed the stable note IDs and t… 1h"
+        );
+        assert_eq!(at(&long(None)), " ● Landed the stable note IDs and the …");
         assert_eq!(text[4], "");
         assert!(text[0].ends_with("/ filter"), "{:?}", text[0]);
         // The group's heading with its count at the right edge, then the
@@ -1194,6 +1239,7 @@ mod tests {
             },
             title: "3 new on Slack".into(),
             detail: "Ada · #general".into(),
+            time: None,
         };
         let out = sidebar_lines(
             std::slice::from_ref(&t),

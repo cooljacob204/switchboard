@@ -1030,7 +1030,8 @@ impl Server {
                 .iter()
                 .map(|c| {
                     let mut item = crate::items::Item::new(&c.id, c.title())
-                        .detail("working a note continuously");
+                        .detail("working a note continuously")
+                        .time(c.at);
                     item.lines = vec![
                         "Closed by working a note continuously once it landed, without your seeing it (Settings' Close a worked note's landed tabs); its item's Done: line in the note says what landed".to_string(),
                     ];
@@ -1044,7 +1045,9 @@ impl Server {
         let autolanded = super::landed::read(&paths::state_dir())
             .iter()
             .map(|l| {
-                let mut item = crate::items::Item::new(&l.hash, l.title()).detail("without asking");
+                let mut item = crate::items::Item::new(&l.hash, l.title())
+                    .detail("without asking")
+                    .time(l.at);
                 let at = util::local_at_ms(l.at).strftime("%-I:%M %p").to_string();
                 item.lines = vec![format!(
                     "Landed on the default branch without asking, as working a note continuously's \"Land without asking\" allows, at {at}"

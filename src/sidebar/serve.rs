@@ -512,6 +512,12 @@ impl Server {
                     },
                     title,
                     detail,
+                    // The newest one's time; a meeting's is when it starts,
+                    // not when it came.
+                    time: (source != "meeting")
+                        .then(|| items.iter().filter_map(|i| i.time).max())
+                        .flatten()
+                        .map(|ms| ms.div_euclid(1000)),
                 }
             })
             .collect()
