@@ -41,6 +41,16 @@ use crate::ui::{PickItem, Picker};
 use crate::worktree;
 use crate::{paths, platform, settings, util};
 
+/// `wtn`'s arguments for a note's item: its line, and `--target` with the
+/// branch it lands on, none for the default branch.
+fn item_args(line: usize, target: &str) -> Vec<String> {
+    let mut args = vec!["--item".to_string(), line.to_string()];
+    if !target.is_empty() {
+        args.extend(["--target".to_string(), target.to_string()]);
+    }
+    args
+}
+
 /// The rest of a key's work, run back on the server's task.
 type Then = Box<dyn FnOnce(&mut Server, ClientId) + Send>;
 
@@ -825,11 +835,23 @@ impl Server {
                             .filter(|i| values.contains(&i.line.to_string().as_str()))
                             .collect()
                     };
-                    let tabs: Vec<TabId> = chosen
-                        .into_iter()
-                        .filter_map(|item| server.open_item_tab(client, &repo, &note, item, ""))
-                        .collect();
-                    server.front(client, &tabs);
+                    let chosen: Vec<worktree_from_note::Item> =
+                        chosen.into_iter().cloned().collect();
+                    if chosen.is_empty() {
+                        return;
+                    }
+                    // "Land on:", as autopilot's setup asks it, the default
+                    // branch first so Enter lands there as before.
+                    let at = repo.clone();
+                    server.autopilot_pick_target(client, at, move |server, client, target| {
+                        let tabs: Vec<TabId> = chosen
+                            .iter()
+                            .filter_map(|item| {
+                                server.open_item_tab(client, &repo, &note, item, &target)
+                            })
+                            .collect();
+                        server.front(client, &tabs);
+                    });
                 });
             },
         );
@@ -853,11 +875,11 @@ impl Server {
         target: &str,
     ) -> Option<TabId> {
         let mut command = vec!["env".to_string(), format!("WTN_NOTE={note}")];
-        let mut args = vec!["--item".to_string(), item.line.to_string()];
-        if !target.is_empty() {
-            args.extend(["--target".to_string(), target.to_string()]);
-        }
-        command.extend(worktree::tab_running("worktree-from-note", "wtn", &args));
+        command.extend(worktree::tab_running(
+            "worktree-from-note",
+            "wtn",
+            &item_args(item.line, target),
+        ));
         let tab = self.work_tab(client, repo, command, false)?;
         // Named with the item cut short, for the tab bar and the second
         // status line, its whole first line kept as the tab's full title,
@@ -931,6 +953,15 @@ impl Server {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_items_tab_names_its_target_only_when_one_was_chosen() {
+        assert_eq!(item_args(12, ""), ["--item", "12"]);
+        assert_eq!(
+            item_args(12, "cquinones/dev"),
+            ["--item", "12", "--target", "cquinones/dev"]
+        );
+    }
 
     #[test]
     fn tickets_are_ids_or_urls_each_once_in_capitals() {

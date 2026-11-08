@@ -250,8 +250,9 @@ impl Server {
     /// "Land on:": the repository's default branch first, so Enter keeps
     /// landing there, then its local branches, read from git's files off
     /// the task, then "Another branch…" to type one; `then` given the
-    /// branch, empty for the default one.
-    fn autopilot_pick_target(
+    /// branch, empty for the default one. The palette's "Start work on a
+    /// note's checklist items" asks it too, after the items.
+    pub(crate) fn autopilot_pick_target(
         &mut self,
         client: ClientId,
         repo: PathBuf,

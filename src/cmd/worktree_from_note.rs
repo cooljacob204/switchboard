@@ -121,7 +121,7 @@ fn usage() -> ExitCode {
          hand them over.\n\
          --target cuts the item's branch from that local branch rather than the default\n\
          branch, and records it as branch.<branch>.wtnTarget, which queue-and-clean\n\
-         lands it on (autopilot's target).",
+         lands it on (autopilot's target, or one picked by hand).",
         worktree::DEFAULT_WORKTREE_DIR
     );
     ExitCode::from(1)
