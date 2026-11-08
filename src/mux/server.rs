@@ -3040,13 +3040,22 @@ impl Server {
             .and_then(|t| self.panes.get(&t.active))
             .map(|slot| super::header::Shown::of_pane(|k| slot.opts.get(k).cloned()))
             .unwrap_or(super::header::Shown::Claude);
+        let state = self.tab_agent(tab);
+        // How long the pane holding that state has held it.
+        let since = self
+            .tab_panes(tab)
+            .into_iter()
+            .filter_map(|p| self.agents.get(p))
+            .find(|a| a.state.is_some() && a.state == state)
+            .map(|a| a.since);
         super::header::Header {
             name: self.tab_label(tab),
             path: self
                 .tab_path(tab)
                 .map(crate::paths::tilde)
                 .unwrap_or_default(),
-            state: self.tab_agent(tab),
+            state,
+            age: crate::sidebar::text::ago(since, crate::util::now_secs()),
             color: self.tab_color(tab).map(Into::into),
             shown,
         }

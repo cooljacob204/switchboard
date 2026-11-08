@@ -95,6 +95,8 @@ pub struct Header {
     /// Where the tab works, as it is shown (`~/code/app`).
     pub path: String,
     pub state: Option<State>,
+    /// How long it has been in that state (`4m`), empty when not known.
+    pub age: String,
     pub color: Option<Color>,
     pub shown: Shown,
 }
@@ -135,7 +137,13 @@ pub fn draw(buf: &mut Buffer, area: Rect, h: &Header, p: &Palette) -> Keys {
     );
     let mut facts = vec![h.path.clone()];
     if let Some(s) = h.state {
-        facts.push(s.name().to_string());
+        // "waiting 4m": how long a tab has waited is what tells you where
+        // M-a should take you first.
+        facts.push(if h.age.is_empty() {
+            s.name().to_string()
+        } else {
+            format!("{} {}", s.name(), h.age)
+        });
     }
     compose::put(buf, x + 3, first, &facts.join(" · "), band.fg(p.dim));
     if area.height < 3 {
@@ -199,6 +207,7 @@ mod tests {
             name: "planning".into(),
             path: "~/switchboard".into(),
             state: Some(State::Working),
+            age: "2m".into(),
             color: None,
             shown,
         }
@@ -209,7 +218,7 @@ mod tests {
         let area = Rect::new(0, 0, 90, ROWS);
         let mut buf = Buffer::empty(area);
         let keys = draw(&mut buf, area, &header(Shown::Claude), &Palette::DARK);
-        assert_eq!(text(&buf, 0), " ⠹ planning   ~/switchboard · working");
+        assert_eq!(text(&buf, 0), " ⠹ planning   ~/switchboard · working 2m");
         assert_eq!(text(&buf, 1), "");
         assert_eq!(
             text(&buf, 2),

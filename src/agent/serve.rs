@@ -155,7 +155,7 @@ impl Server {
     /// A tab's panes, a Claude parked behind the diff or lazygit included:
     /// the tab still shows what it is doing, and looking at the tab sees it
     /// finished, as looking at a tmux window did whatever was in front.
-    fn tab_panes(&self, tab: TabId) -> Vec<PaneId> {
+    pub(crate) fn tab_panes(&self, tab: TabId) -> Vec<PaneId> {
         self.panes_with_parked(tab)
     }
 
@@ -357,7 +357,23 @@ impl Server {
             .find(|p| self.runs_claude(*p))
         {
             Some(pane) => self.focus_pane(pane),
-            None => self.say(None, "No Claude in this tab"),
+            None => {
+                // UX 2.0: M-c is the header's Claude key, so with the diff,
+                // the PR or the ticket in Claude's place it closes that,
+                // which gives Claude its place back (src/diff/in_place.rs).
+                let in_place = settings::is_on("ux2")
+                    .then(|| self.tabs.get(&tab).map(|t| t.active))
+                    .flatten()
+                    .filter(|p| {
+                        self.panes
+                            .get(p)
+                            .is_some_and(|s| s.opts.contains_key("@in_place"))
+                    });
+                match in_place {
+                    Some(tool) => self.kill_pane(tool),
+                    None => self.say(None, "No Claude in this tab"),
+                }
+            }
         }
     }
 

@@ -261,8 +261,8 @@ Settings' "Second status line" (`second_status`, off by default) adds a line und
 Settings' "UX 2.0" (`ux2`, off by default) is a new look being built a part at a time. Today it:
 
 - takes the status line away;
-- gives each tab a header over its panes: its state, its name in bold in its color, and dimmed where it works and what Claude is doing; under it, the keys of what the tab can show in Claude's place (`M-c` Claude, `M-d` Diff, `M-v` PR, `M-i` Ticket, `M-e` Note), the one it shows highlighted;
-- shows the PR description (`M-v`) and the ticket (`M-i`) in Claude's place, as `M-d` shows the diff, rather than beside it, the same key putting Claude back;
+- gives each tab a header over its panes: its state, its name in bold in its color, and dimmed where it works and what Claude is doing, with how long (`waiting 4m`), so after `M-a` you see how long the tab has waited on you; under it, the keys of what the tab can show in Claude's place (`M-c` Claude, `M-d` Diff, `M-v` PR, `M-i` Ticket, `M-e` Note), the one it shows highlighted;
+- shows the PR description (`M-v`) and the ticket (`M-i`) in Claude's place, as `M-d` shows the diff, rather than beside it, the same key, or `M-c`, putting Claude back;
 - starts the sidebar with how many tabs there are and `/ filter`, in place of the session's name and the counts, and its notifications under that, a line each, gone when there are none, in place of their section at the bottom;
 - draws each group's heading in its color, bold, its count at the right edge, and each tab in two lines: its state's mark with no pill, its number in its project's color and its name on one line, then what it is doing; the cursor's tab shaded with a bar at its left, no rule between tabs, and the keys that start, find and walk tabs (`M-t`, `M-j`, `M-a`) on the sidebar's last row;
 - draws the pinned, reminder and pending-checks marks as symbols of your terminal's font (▲ ◷ ◌) in place of emoji (📌 ⏰ ⏳), one column each.
