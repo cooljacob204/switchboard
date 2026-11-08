@@ -268,6 +268,7 @@ Settings' "UX 2.0" (`ux2`, off by default) is a new look being built a part at a
 - draws the pinned, reminder and pending-checks marks as symbols of your terminal's font (▲ ◷ ◌) in place of emoji (📌 ⏰ ⏳), one column each;
 - lays mission control's PRs view out as columns of cards: each column's name bold with a dim count, each PR a rounded box with its number in the accent color and its checks' mark (✓ ✕ ◌) on its top edge, its title, then its repository, review and place in the queue dimmed, the chosen card's edge in the accent color.
 - in Notes, draws chips on a line of their own under an unticked checklist item: `plan` when an indented `Plan: [[...]]` line is under it, and `needs a choice` in yellow when the item or that line says so; a ticked item gets none.
+- draws each worktree in mission control's Landing view as a row of stage cells under the stages' names (tests, review, leak check, lock, push, applied), its name bold with where it is dim under it: done green with ✓, the step its phase names blue, its place in the landing queue magenta, the rest dim and waiting; the merge queue's rows stay one line each.
 
 A pane zoomed with `M-=` covers the header, as it covers the sidebar. With `ux2` off, the status line, the sidebar and those keys are as before.
 

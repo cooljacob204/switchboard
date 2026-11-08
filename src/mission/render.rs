@@ -1030,6 +1030,10 @@ fn list(
         }
         return;
     }
+    if snap.rules.ux2 && view.id == ViewId::Landing && cols >= STAGES_AT + 6 * STAGE_STEP {
+        stage_rows(view, cols, rows, m, top_row, lines, hits);
+        return;
+    }
     let table = view.table();
     let footer = table && !data.footer.is_empty();
     let body = rows.saturating_sub(1 + lines.len());
@@ -1252,6 +1256,193 @@ fn list(
         row.spans
             .extend(table_row(&data.footer, &|_| bold(theme.text)));
         lines.push(row.line(cols, None));
+    }
+}
+
+/// UX 2.0's Landing view: where the stage cells start, how wide each is and
+/// how far apart they start.
+const STAGES_AT: usize = 40;
+const STAGE_WIDTH: usize = 13;
+const STAGE_STEP: usize = 14;
+const STAGES: [&str; 6] = ["tests", "review", "leak check", "lock", "push", "applied"];
+
+/// How far a stage of a landing has got.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Stage {
+    Done,
+    Running,
+    Waiting,
+    Queued,
+}
+
+impl Stage {
+    /// Its text's color, its run's background and whether the text is bold.
+    fn look(self, theme: &Theme) -> (Color, Color, bool) {
+        match self {
+            Stage::Done => (Color::Indexed(114), Color::Indexed(22), false),
+            Stage::Running => (Color::Indexed(75), Color::Indexed(17), true),
+            Stage::Waiting => (theme.dim, theme.panel, false),
+            Stage::Queued => (Color::Indexed(176), Color::Indexed(53), false),
+        }
+    }
+}
+
+/// A landing's six stages from what the view holds of it (`data.landing`):
+/// a worktree is in the landing queue only once its tests, review and leak
+/// check are done (queue-and-clean takes the lock after them), so those are
+/// done; a waiter is queued for the lock at its place; the one holding it
+/// is at the step its phase names. Nothing it holds says a stage failed, so
+/// there is no failed cell.
+fn landing_stages(landing: &serde_json::Value) -> [(Stage, String); 6] {
+    let done = |s: &str| (Stage::Done, format!("✓ {s}"));
+    let running = |s: &str| (Stage::Running, s.to_string());
+    let waiting = || (Stage::Waiting, "waiting".to_string());
+    let mut out = [
+        done("passed"),
+        done("clean"),
+        done("none"),
+        waiting(),
+        waiting(),
+        waiting(),
+    ];
+    if landing.get("holding").and_then(serde_json::Value::as_bool) != Some(true) {
+        let place = landing
+            .get("place")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(1);
+        let suffix = match (place % 10, place % 100) {
+            (1, n) if n != 11 => "st",
+            (2, n) if n != 12 => "nd",
+            (3, n) if n != 13 => "rd",
+            _ => "th",
+        };
+        out[3] = (Stage::Queued, format!("{place}{suffix}"));
+        return out;
+    }
+    out[3] = done("held");
+    let phase = landing
+        .get("phase")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("");
+    if phase.contains("testing") {
+        out[0] = running("testing…");
+    } else if phase.starts_with("reviewing") {
+        out[1] = running("reviewing…");
+    } else if phase.starts_with("pushing") {
+        out[4] = running("pushing…");
+    } else if phase.starts_with("applying") {
+        out[4] = done("pushed");
+        out[5] = running("applying…");
+    } else if phase.starts_with("cleaning") {
+        out[4] = done("pushed");
+        out[5] = done("applied");
+    }
+    out
+}
+
+/// `text` centered in `w` columns.
+fn centered(text: &str, w: usize) -> String {
+    let text = text::cut(text, w);
+    let left = w.saturating_sub(width(&text)) / 2;
+    let right = w.saturating_sub(width(&text) + left);
+    format!("{}{text}{}", " ".repeat(left), " ".repeat(right))
+}
+
+/// UX 2.0's Landing view: each repository's landing queue under its
+/// heading and the stages' names, each worktree two lines, its name bold
+/// with a cell per stage, then a dim note of where it is under it; the
+/// merge queue's rows one line each, as before.
+fn stage_rows(
+    view: &View,
+    cols: usize,
+    rows: usize,
+    m: &Mission,
+    top_row: usize,
+    lines: &mut Vec<Line>,
+    hits: &mut Vec<HitBox>,
+) {
+    let theme = &m.snap.theme;
+    let items = &view.data.items;
+    let room = (rows.saturating_sub(1 + lines.len()) / 2).max(1);
+    let cursor = m.cursor.max(0) as usize;
+    let first = (cursor + 1).saturating_sub(room);
+    let name_w = STAGES_AT.saturating_sub(4);
+    for (index, item) in items.iter().enumerate().skip(first).take(room) {
+        let chosen = index == cursor && m.cursor >= 0;
+        let fill = if chosen {
+            Some(theme.highlight)
+        } else if m.hover == Some(Spot::Index(index as isize)) {
+            Some(theme.panel)
+        } else {
+            None
+        };
+        let mut hit = |lines: &Vec<Line>| {
+            hits.push(HitBox {
+                y: (top_row + lines.len()) as u16,
+                x0: 0,
+                x1: cols.saturating_sub(1) as u16,
+                spot: Spot::Index(index as isize),
+            });
+        };
+        if views::is_header(item) {
+            hit(lines);
+            let count = item
+                .data
+                .get("count")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(0);
+            let mut row = Row::default();
+            row.put(format!(" {}", item.title), bold(theme.bright))
+                .put(format!("   {count}"), fg(theme.dim));
+            lines.push(row.line(cols, fill));
+            if item.id.ends_with(":direct") {
+                let mut heads = Row::default();
+                heads.put(text::pad(" worktree", STAGES_AT), fg(theme.dim));
+                for name in STAGES {
+                    heads
+                        .put(centered(name, STAGE_WIDTH), fg(theme.dim))
+                        .put(" ", Style::new());
+                }
+                lines.push(heads.line(cols, None));
+            }
+            continue;
+        }
+        let pointer = if chosen { "▌" } else { " " };
+        let Some(landing) = item.data.get("landing").filter(|l| l.is_object()) else {
+            hit(lines);
+            let mut row = Row::default();
+            row.put(pointer, fg(ACCENT))
+                .put(" ", Style::new())
+                .put(item.title.clone(), fg(theme.text))
+                .put("  ", Style::new())
+                .put(item.detail.clone(), fg(theme.dim));
+            lines.push(row.line(cols, fill));
+            continue;
+        };
+        let name = item
+            .title
+            .split_once(". ")
+            .map_or(item.title.as_str(), |(_, n)| n);
+        hit(lines);
+        let mut top = Row::default();
+        top.put(pointer, fg(ACCENT)).put(" ", Style::new()).put(
+            text::pad(&text::cut(name, name_w), STAGES_AT - 2),
+            bold(theme.bright),
+        );
+        for (stage, label) in landing_stages(landing) {
+            let (color, bg, strong) = stage.look(theme);
+            let style = if strong { bold(color) } else { fg(color) }.bg(bg);
+            top.put(centered(&label, STAGE_WIDTH), style)
+                .put(" ", Style::new());
+        }
+        lines.push(top.line(cols, fill));
+        hit(lines);
+        let mut under = Row::default();
+        under
+            .put(pointer, fg(ACCENT))
+            .put(" ", Style::new())
+            .put(text::cut(&item.detail, name_w), fg(theme.dim));
+        lines.push(under.line(cols, fill));
     }
 }
 
@@ -2001,5 +2192,72 @@ mod tests {
         );
         assert!(text[2].contains("1 build") && text[2].contains("93.0"));
         assert!(text[10].contains("All tabs"), "{text:#?}");
+    }
+
+    #[test]
+    fn with_ux2_a_landing_is_a_row_of_stage_cells_with_its_note_under_its_name() {
+        let landing = |n: &str, holding: bool, place: Option<u64>, phase: Option<&str>| {
+            Item::new(format!("land:/w/{n}"), format!("1. {n}"))
+                .detail(if holding {
+                    "landing · pushing · tab 3"
+                } else {
+                    "waiting · tab 4"
+                })
+                .data(serde_json::json!({ "landing": {
+                    "holding": holding, "place": place, "phase": phase,
+                } }))
+        };
+        let items = vec![
+            views::header("/r:direct", "switchboard · straight to main", 2),
+            landing("note-stable-ids", true, None, Some("pushing")),
+            landing("note-benchmark", false, Some(2), None),
+        ];
+        let mut m = mission(
+            Vec::new(),
+            vec![list_view(ViewId::Landing, "Landing", items)],
+        );
+        m.snap.rules.ux2 = true;
+        m.view = 1;
+        let (lines, _) = screen(&m, 140, 20);
+        let text = texts(&lines);
+        let at = text
+            .iter()
+            .position(|l| l.contains("switchboard · straight to main"))
+            .unwrap();
+        let heads = &text[at + 1];
+        assert!(
+            heads.contains("worktree") && heads.contains("leak check") && heads.contains("applied"),
+            "{heads}"
+        );
+        let holder = &text[at + 2];
+        assert!(
+            holder.contains("note-stable-ids") && !holder.contains("1. "),
+            "{holder}"
+        );
+        assert!(
+            holder.contains("✓ held") && holder.contains("pushing…") && holder.contains("waiting"),
+            "{holder}"
+        );
+        assert!(
+            text[at + 3].contains("landing · pushing · tab 3"),
+            "{}",
+            text[at + 3]
+        );
+        assert!(text[at + 4].contains("2nd"), "{}", text[at + 4]);
+        // Each cell is a run of its stage's background: pushing is blue.
+        let pushing = lines[at + 2]
+            .spans
+            .iter()
+            .find(|s| s.content.contains("pushing…"))
+            .unwrap();
+        assert_eq!(pushing.style.bg, Some(Color::Indexed(17)));
+        // Off, the rows are as before.
+        m.snap.rules.ux2 = false;
+        let (lines, _) = screen(&m, 140, 20);
+        assert!(
+            texts(&lines)
+                .iter()
+                .any(|l| l.contains("1. note-stable-ids"))
+        );
     }
 }

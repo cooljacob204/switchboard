@@ -360,6 +360,8 @@ pub fn view_items(
                         "holding": holding,
                         "first": !holding && at == 0,
                         "last": !holding && at + 1 == r.waiting.len(),
+                        "place": (!holding).then(|| at + 1),
+                        "phase": tab.and_then(|t| t.phase.clone()),
                     },
                     "search": format!("{} {}", r.name, entry.path.display()),
                 }));
