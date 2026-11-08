@@ -1,18 +1,22 @@
 //! What the work pickers last had picked, so their lists lead with it: the
 //! directories any of them was given (M-t, M-n, M-W, M-B, wtpr's, wtn's,
 //! shaping's), and, for each repository, the branches picked at "Land on:"
-//! (wtn's picker and autopilot's setup). New in the Rust version: the tmux
+//! (wtn's picker and autopilot's setup), and, for each note, the repository
+//! its items were last started in. New in the Rust version: the tmux
 //! version's pick-dir.zsh and autopilot's target list had no memory, so the
 //! repository items are queued in sat wherever its tabs put it, and a
 //! branch like `cquinones/dev` had to be found each time.
 //!
 //! One small file, `work-recent.json` in the state folder, the most recent
 //! first in each list, with the time each was picked: `{"dirs": [{"path",
-//! "at"}], "branches": {"<common git dir>": [{"name", "at"}]}}`. The default
-//! branch is kept as `""`, the value its row carries. Each list keeps its
+//! "at"}], "branches": {"<common git dir>": [{"name", "at"}]}, "notes":
+//! {"<note's ID>": "<repository>"}}`, a note with no ID known by its path
+//! within the notes folder. The default branch is kept as `""`, the value
+//! its row carries. Each list keeps its
 //! last 50, and a directory that is gone is dropped as the next pick is kept.
 
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, MutexGuard};
 
 use serde_json::{Value, json};
 
@@ -47,6 +51,17 @@ pub fn pick_branch(common: &Path, branch: &str) {
     pick_branch_in(&file(), common, branch, util::now_ms());
 }
 
+/// The repository a note's items were last started in, `note` its ID or,
+/// with none, its path within the notes folder; `None` once it is gone.
+pub fn note_repo(note: &str) -> Option<PathBuf> {
+    note_repo_in(&file(), note)
+}
+
+/// Keeps `repo` as the repository a note's items were last started in.
+pub fn pick_note_repo(note: &str, repo: &Path) {
+    pick_note_repo_in(&file(), note, repo);
+}
+
 /// Runs `keep` (one of the picks above) off the server's task, or right
 /// away where there is no runtime.
 pub fn in_background(keep: impl FnOnce() + Send + 'static) {
@@ -55,6 +70,16 @@ pub fn in_background(keep: impl FnOnce() + Send + 'static) {
     } else {
         keep();
     }
+}
+
+/// Held while a pick is read in and written back, so two kept at once (a
+/// branch and the note's repository, as an item's tab opens) don't write
+/// over each other.
+fn writing() -> MutexGuard<'static, ()> {
+    static WRITING: Mutex<()> = Mutex::new(());
+    WRITING
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 fn read(file: &Path) -> Value {
@@ -103,6 +128,7 @@ fn put_first(list: &Value, key: &str, value: &str, at: i64, keep: impl Fn(&str) 
 }
 
 fn pick_dir_in(file: &Path, dir: &Path, at: i64) {
+    let _held = writing();
     let mut all = read(file);
     all["dirs"] = put_first(&all["dirs"], "path", &dir.to_string_lossy(), at, |p| {
         Path::new(p).is_dir()
@@ -111,12 +137,30 @@ fn pick_dir_in(file: &Path, dir: &Path, at: i64) {
 }
 
 fn pick_branch_in(file: &Path, common: &Path, branch: &str, at: i64) {
+    let _held = writing();
     let mut all = read(file);
     if !all["branches"].is_object() {
         all["branches"] = json!({});
     }
     let repo = common.to_string_lossy().to_string();
     all["branches"][&repo] = put_first(&all["branches"][&repo], "name", branch, at, |_| true);
+    let _ = util::write_atomic(file, util::json_pretty(&all));
+}
+
+fn note_repo_in(file: &Path, note: &str) -> Option<PathBuf> {
+    read(file)["notes"][note]
+        .as_str()
+        .map(PathBuf::from)
+        .filter(|p| p.is_dir())
+}
+
+fn pick_note_repo_in(file: &Path, note: &str, repo: &Path) {
+    let _held = writing();
+    let mut all = read(file);
+    if !all["notes"].is_object() {
+        all["notes"] = json!({});
+    }
+    all["notes"][note] = json!(repo.to_string_lossy());
     let _ = util::write_atomic(file, util::json_pretty(&all));
 }
 
@@ -168,6 +212,27 @@ mod tests {
         assert_eq!(branches_in(&file, a), ["cquinones/dev", ""]);
         assert_eq!(branches_in(&file, b), ["x"]);
         assert!(branches_in(&file, Path::new("/r/c/.git")).is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_note_keeps_the_repository_its_items_were_last_started_in() {
+        let dir = scratch("notes");
+        let file = dir.join("work-recent.json");
+        let (a, b) = (dir.join("a"), dir.join("b"));
+        std::fs::create_dir_all(&a).unwrap();
+        std::fs::create_dir_all(&b).unwrap();
+        assert_eq!(note_repo_in(&file, "id-1"), None);
+        pick_note_repo_in(&file, "id-1", &a);
+        pick_note_repo_in(&file, "Plan.md", &a);
+        pick_note_repo_in(&file, "id-1", &b);
+        assert_eq!(note_repo_in(&file, "id-1"), Some(b.clone()));
+        assert_eq!(note_repo_in(&file, "Plan.md"), Some(a));
+        // Kept beside the other lists, and dropped once the folder is gone.
+        pick_dir_in(&file, &b, 1);
+        assert_eq!(dirs_in(&file), std::slice::from_ref(&b));
+        std::fs::remove_dir_all(&b).unwrap();
+        assert_eq!(note_repo_in(&file, "id-1"), None);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

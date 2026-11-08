@@ -75,6 +75,16 @@ fn strip_pr(name: &str) -> &str {
         .map_or(name, |(_, rest)| rest)
 }
 
+/// The item a directory's branch is for, from its repository's git config
+/// read as a file (`branch.<branch>.wtnItem`), so no git runs: for Notes'
+/// background look and `gw`'s look for a tab on the item, off the
+/// server's task.
+pub fn wtn_item_at(dir: &std::path::Path) -> Option<String> {
+    let place = crate::tabs::git::locate(dir).filter(|p| p.on_branch())?;
+    let config = std::fs::read_to_string(place.common_dir.join("config")).ok()?;
+    wtn_item(&config, &place.branch)
+}
+
 /// The item a branch is for, from the text of a repository's git config:
 /// `branch.<branch>.wtnItem`, `<note's ID>: <item's first line>`, or
 /// `<note's path>: <item's first line>` from before notes had IDs, the note

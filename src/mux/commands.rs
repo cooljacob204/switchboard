@@ -52,8 +52,9 @@
 //!                                        stdin (src/agent)
 //! press <action> [arg]                   an action run as its key would be,
 //!                                        by its name in keys.json; the notes
-//!                                        app's palette asks this
-//!                                        (src/notes/serve.rs)
+//!                                        app's palette asks this, and its
+//!                                        `gw` presses `work-on-item <note>
+//!                                        <line>` (src/notes/serve.rs)
 //! ```
 
 use std::path::{Path, PathBuf};

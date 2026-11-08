@@ -1043,6 +1043,7 @@ The note is edited with Vim's keys, with the settings a note had before: Space i
 | Commands | `:<line>`, `:s/a/b/g` and `:%s/a/b/g`, `:w`, `:q`, `:wq` or `:x`, `:noh`; `ZZ`, `ZQ` |
 | Insert mode | Ctrl-W, Ctrl-U, Ctrl-H, Backspace, Delete, the arrows, Home, End; Ctrl-V then a key types the key itself |
 | Visual mode | the motions and text objects grow the selection; `d` `x` `c` `s` `y` `>` `<` `~` `u` `U` `J` `p` `r` `o` act on it, `v` and `V` switch between characters and lines, Ctrl-C copies it |
+| Work | `gw` on an unticked checklist item at the top of its list starts work on it in a new tab, as `M-I` does (see [Starting work from the workspace](#starting-work-from-the-workspace)) |
 | Windows | Ctrl-W `h` or `M-Left` (typing too) goes to the list, saving the note and leaving Insert mode; Ctrl-W `l` or `M-Right` goes on to the pane on the note's right, and Ctrl-W `j` `k`, `M-Down` `M-Up` to the pane below or above, as the Alt-arrows move between panes |
 
 Marks, macros and named registers aren't there: `"+y` and the like yank to the one register, which is the clipboard. A drag with the mouse selects; a click puts the cursor there; the wheel scrolls. Ctrl-F and Ctrl-B take the place of Vim's page down and page up in a note; PageDown and PageUp still page.
@@ -1061,7 +1062,7 @@ Marks, macros and named registers aren't there: `"+y` and the like yank to the o
 | `k` | Link | `[text](https://…)` |
 | `t` | Table | rows of cells between bars |
 
-The menu also has, under their own keys there, the checklist's Tick or untick (`c`), Move checked to bottom (`s`), Uncheck all (`u`) and Delete checked items (`D`); Paste image (`v`); and a table's Add row (`r`), Add column (`C`), Delete row (`R`) and Delete column (`X`).
+The menu also has, under their own keys there, the checklist's Tick or untick (`c`), Move checked to bottom (`s`), Uncheck all (`u`), Delete checked items (`D`) and Start work on the item in a new tab (`w`, as `gw`); Paste image (`v`); and a table's Add row (`r`), Add column (`C`), Delete row (`R`) and Delete column (`X`).
 
 A line style applied again turns the line back to body text, as in Notes. A character style works as it does in Notes too: on the selection; off again, for the whole run, in text that has it already; on the word under the cursor; and anywhere else (a space, an empty line, right after a word you typed) on what you type next, starting Insert mode between its markers, which go again if you type nothing. Underline and highlight, which Markdown has no syntax for, are written the way Markdown tools usually write them.
 
@@ -1075,7 +1076,7 @@ A line style applied again turns the line back to body text, as in Notes. A char
 
 **Pictures.** Ctrl-V while typing pastes the image on the clipboard into the note, as in Claude Code (Settings' "Ctrl-V pastes an image", `notes_ctrl_v_image`), and so does the Format menu's Paste image; with no image there, Ctrl-V does what it always does (the terminal's own paste key pastes only text). The image is saved beside the note in `.attachments/<note>/` in its folder, which the list leaves out, and written as `![name](path)` on a line of its own below the cursor's, indented under the item when the cursor is on a list or checklist item: the image goes with the item, and Claude, working the note's items, reads it with them. On Linux, pasting an image needs `wl-paste` (Wayland) or `xclip` (X). The picture is drawn in the note under its line in a terminal that speaks the kitty graphics protocol with Unicode placeholders, Ghostty or kitty (Settings' "Images drawn in a note", `notes_images`); elsewhere it shows as its name. The multiplexer places the picture like text, so it scrolls with the note and a box over it covers it, and passes the picture's graphics commands to your terminal from the notes app's pane alone, since one can have the terminal read any of your files. A picture other than a PNG is made one in Switchboard's cache first. Enter or a click on it opens it in Quick Look on macOS, or in the desktop's viewer on Linux.
 
-**The palette.** Ctrl-Shift-P, in a note or the list, lists every command Notes has, each with its key, the ones picked last first: the list's (on the note open, from a note), the Format menu's, folding, and Switchboard's for Notes: moving Notes beside your work (`M-e`), the note's tab, choosing a tab's note, reading a link from the note beside it, searching notes, Linear, GitHub and Slack (`M-F`), and "Shape the note's checklist items as Linear tickets", which opens a tab running `/shape` for each unticked item. Settings' "Notes command palette" (`notes_palette`) turns it off.
+**The palette.** Ctrl-Shift-P, in a note or the list, lists every command Notes has, each with its key, the ones picked last first: the list's (on the note open, from a note), the Format menu's, folding, and Switchboard's for Notes: moving Notes beside your work (`M-e`), the note's tab, starting work on the checklist item under the cursor in a new tab (`gw`), choosing a tab's note, reading a link from the note beside it, searching notes, Linear, GitHub and Slack (`M-F`), and "Shape the note's checklist items as Linear tickets", which opens a tab running `/shape` for each unticked item. Settings' "Notes command palette" (`notes_palette`) turns it off.
 
 **The finder.** Ctrl-F, in a note or the list, finds a note: every note but those in Recently Deleted, pinned first and then newest, each as its title, its folder and how it starts, any of which you can type to match, with the note shown beside the list. Enter opens it; Esc closes the finder.
 
@@ -1267,6 +1268,7 @@ Run again on the same work, a command reopens it: the worktree is reused if it i
 | `M-B` | Start work on a branch, new or existing, in a new tab (`wtb`) |
 | `M-p`, "Start work on a PR in a new tab (wtpr)" | A PR, in a new tab running `wtpr` |
 | `M-I` | A note's items, a tab each running `wtn` |
+| `gw` in Notes, on a checklist item | That item, in a new tab running `wtn` |
 | `M-p`, "Autopilot: work a note" | A note's items, a few tabs at a time, the next opened as each lands (below) |
 | `M-p`, "Continue shaping Linear tickets, each in a new tab" | Tickets, a tab each running `shape --continue` |
 | `M-o` | Reopen a worktree with no tab and resume its Claude |
@@ -1279,6 +1281,7 @@ Each of the first six asks which directory first, in a list: the directories pic
 - `M-B` lists the repository's branches, local and remote, the most recently committed first. Enter works on the one picked; a name no branch matches is a new branch, and Alt-Enter takes the name typed even when some branch matches it.
 - "Start work on a PR" asks for its number or URL, filled in from the clipboard when it holds one. A URL names its repository, which `wtpr` finds a clone of, so it asks for no directory; a bare number asks which repository it is a PR of.
 - `M-I` asks for the repository, then the note, the most recently changed first, then which of its unticked items to work on. Items under a section for parked work (`## Later`, `## Deferred`) and items a worktree already works on are left out, and one whose plan still needs a choice is marked so; with more than one, the first row takes them all, and Tab marks a few (a `+` before each, Shift-Tab marking going up), which Enter then takes together, then which branch to land on ("Land on:", the same question autopilot asks, sharing its order: the branches picked there before in this repository, the most recent first, the default branch among them by when it was picked, then the default branch if it wasn't, so with nothing picked yet Enter lands there, then the repository's other local branches by name, then "Another branch…", a branch typed there counting as picked; a branch other than the default one runs `wtn --target <branch>`, as autopilot's tabs do). The lower half of the list shows the item under the cursor whole, its full text and what is indented under it, since a row cuts it to one line (Settings' "Show a note's item whole in wtn's list", `wtn_item_preview`). Each item gets a tab, named after it and linked to the note: the tab bar shows the item's first 50 characters, cut at a word and ending in …, and `M-T`, the sidebar and mission control its whole first line, while the tab keeps that name; renamed since, it shows its new name.
+- `gw` in Notes, on an unticked checklist item at the top of its list (the Format menu's "Start work on the item in a new tab" and Notes' palette have it too), starts that item the same way without asking for the note or the item: Notes saves the note, so the line it names is the one on screen, then the workspace asks for the repository, the one this note's items were last started in first (kept by the note's ID in `work-recent.json`, so Enter alone takes it), then "Land on:", and opens the item's tab in front. On a ticked item, one under another, one in a section for parked work or a line that is no item, Notes says why; an item a tab is already linked to asks whether to go to that tab, and one a worktree of the repository picked already works on is refused.
 - "Continue shaping Linear tickets" asks for the tickets, then the directory, which must be in a repository so `shape` has code to read.
 
 `M-p`'s "Shape the note's checklist items" opens a tab running `/shape` for each unticked checklist item of a note you pick.
@@ -2019,7 +2022,9 @@ switchboard tip <name> | tip seen <name> | tip reset
                                          show every tip again
 switchboard press <action> [arg]         run an action as its key would, by its
                                          name in keys.json (only note-tab takes
-                                         an arg, the note)
+                                         an arg, the note; work-on-item, what
+                                         Notes' gw presses, takes the note and
+                                         the item's line)
 switchboard sources [refresh [view]]     mission control's GitHub and Linear
                                          data as JSON, or looked up again now
 switchboard list-keys                    every key and what it does

@@ -795,6 +795,49 @@ fn the_palette_runs_the_command_picked_where_it_was_opened() {
 }
 
 #[test]
+fn gw_on_an_item_saves_the_note_and_presses_work_on_item_and_elsewhere_says_why() {
+    let (dir, mut store) = temp("gw");
+    let path = store.create("", Some("Plan"));
+    write(&path, "# Plan\n\n- [ ] Fix the login\n- [x] Done\n");
+    let (mut app, _) = app_in(store, options());
+    app.start();
+    // An unsaved line above the item moves it, and the press names the line
+    // on screen, saved.
+    app.editor.doc.row = 1;
+    keys(&mut app, "oA new first line<Esc>");
+    app.editor.doc.row = 3;
+    assert_eq!(
+        app.item_press(),
+        Some(vec![
+            "work-on-item".to_string(),
+            "Plan.md".to_string(),
+            "4".to_string()
+        ])
+    );
+    assert!(
+        fs::read_to_string(dir.path.join("Plan.md"))
+            .unwrap()
+            .contains("A new first line\n- [ ] Fix the login"),
+        "saved before the press"
+    );
+    app.editor.doc.row = 4;
+    assert_eq!(app.item_press(), None);
+    assert!(
+        app.message
+            .as_ref()
+            .is_some_and(|(m, _)| m.contains("that line is ticked"))
+    );
+    // gw itself, on a line that is no item, says so.
+    app.editor.doc.row = 0;
+    keys(&mut app, "gw");
+    assert!(
+        app.message
+            .as_ref()
+            .is_some_and(|(m, _)| m.contains("isn't a checklist item"))
+    );
+}
+
+#[test]
 fn an_image_pasted_while_typing_goes_under_the_line_and_ctrl_v_else_types_the_next_key() {
     let (dir, mut store) = temp("ctrl-v");
     let path = store.create("", Some("Bug report"));

@@ -345,6 +345,33 @@ pub fn items(text: &str) -> Vec<Item> {
     out
 }
 
+/// The item on a note's line (1-based), for starting work on it from
+/// Notes; else why that line can't be started, to say after "That line ".
+pub fn item_at(text: &str, line: usize) -> Result<Item, &'static str> {
+    let Some(at) = line.checked_sub(1).and_then(|i| text.split('\n').nth(i)) else {
+        return Err("isn't in the note");
+    };
+    let trimmed = at.trim_start();
+    let checklist = |rest: &str| {
+        ["- [ ] ", "- [x] ", "- [X] "]
+            .iter()
+            .any(|m| rest.starts_with(m))
+    };
+    if !checklist(trimmed) {
+        return Err("isn't a checklist item");
+    }
+    if trimmed.len() != at.len() {
+        return Err("is under another item: start work on the item at the top of the list");
+    }
+    if !at.starts_with("- [ ] ") {
+        return Err("is ticked");
+    }
+    items(text)
+        .into_iter()
+        .find(|i| i.line == line)
+        .ok_or("is in a section of parked work")
+}
+
 /// One item whole, by its line number (1-based): its line and what is
 /// indented under it, as wtn hands it to Claude, each line ending in a
 /// newline; empty when the note has no such line.
@@ -909,6 +936,23 @@ pub fn skip_from(text: &str) -> HashSet<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_item_on_a_line_is_an_unticked_top_level_one_or_says_why_not() {
+        let text = "# Plan\n\n- [ ] Fix the login\n  - [ ] A step\n- [x] Done\nProse\n\n## Later\n\n- [ ] Someday\n";
+        let item = item_at(text, 3).unwrap();
+        assert_eq!((item.line, item.text.as_str()), (3, "Fix the login"));
+        assert!(
+            item_at(text, 4)
+                .unwrap_err()
+                .starts_with("is under another")
+        );
+        assert_eq!(item_at(text, 5), Err("is ticked"));
+        assert_eq!(item_at(text, 6), Err("isn't a checklist item"));
+        assert_eq!(item_at(text, 10), Err("is in a section of parked work"));
+        assert_eq!(item_at(text, 0), Err("isn't in the note"));
+        assert_eq!(item_at(text, 99), Err("isn't in the note"));
+    }
 
     #[test]
     fn a_decision_section_with_its_choice_made_counts_as_settled() {

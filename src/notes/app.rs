@@ -349,6 +349,10 @@ pub const NOTE_KEYS: &[(&str, &str)] = &[
     ("Enter", "tick, fold or follow what the cursor is on"),
     ("Ctrl-P", "the Format menu, on the word, line or selection"),
     ("Ctrl-Shift-P", "every Notes command, in a palette"),
+    (
+        "gw",
+        "start work on the checklist item in a new tab: pick the repository and the branch to land on",
+    ),
     ("Ctrl-F", "find a note"),
     ("Ctrl-B", "show or put away the list of notes"),
     ("Ctrl-V", "paste the clipboard's image, while typing"),
@@ -1268,15 +1272,13 @@ impl App {
     }
 
     /// A Switchboard command for Notes, asked of the workspace's server.
-    fn press(&mut self, name: &str, arg: Option<&str>) {
+    fn press(&mut self, words: &[&str]) {
         if !self.opts.server {
             self.say("notes: that needs Switchboard's workspace");
             return;
         }
-        let mut args = vec!["press", name];
-        if let Some(a) = arg {
-            args.push(a);
-        }
+        let mut args = vec!["press"];
+        args.extend(words);
         match crate::mux::socket::ask_ok(&args) {
             Ok(_) => {}
             Err(e) => self.say(format!("notes: {e}")),
@@ -1292,7 +1294,49 @@ impl App {
             return;
         };
         let rel = self.store.relative(&path);
-        self.press("note-tab", Some(&rel));
+        self.press(&["note-tab", &rel]);
+    }
+
+    /// `gw`: work on the checklist item on the cursor's line in a new tab,
+    /// asked of the workspace (`press work-on-item <note> <line>`), which
+    /// asks the repository and the branch to land on; on any other line,
+    /// why not. The note is saved first, so the line the server reads is
+    /// the one on screen.
+    fn work_on_item(&mut self) {
+        if let Some(words) = self.item_press() {
+            let words: Vec<&str> = words.iter().map(String::as_str).collect();
+            self.press(&words);
+        }
+    }
+
+    /// What `gw` presses for the cursor's line, the note saved; `None`,
+    /// having said why, when it is no unticked top-level item.
+    fn item_press(&mut self) -> Option<Vec<String>> {
+        let path = self.current_path()?.to_path_buf();
+        if self.store.in_trash(&path) {
+            self.say("notes: restore the note to start work on its items");
+            return None;
+        }
+        self.leave_modes();
+        let line = self.editor.doc.row + 1;
+        let text = self.editor.doc.text.lines().join("\n");
+        if let Err(why) = crate::cmd::worktree_from_note::item_at(&text, line) {
+            self.say(format!("notes: that line {why}"));
+            return None;
+        }
+        // Saving can rename the note after its title, so its path is read
+        // after.
+        self.save();
+        let path = self.current_path()?.to_path_buf();
+        if self.modified() {
+            return None;
+        }
+        let rel = self.store.relative(&path);
+        Some(vec![
+            crate::notes::serve::WORK_ON_ITEM.to_string(),
+            rel,
+            line.to_string(),
+        ])
     }
 
     // ── Boxes ─────────────────────────────────────────────────────────────
@@ -1497,6 +1541,10 @@ impl App {
                 self.paste_image();
                 return;
             }
+            FormatAct::WorkOnItem => {
+                self.work_on_item();
+                return;
+            }
             _ => {}
         }
         self.editor.change(|doc| match act {
@@ -1514,7 +1562,7 @@ impl App {
             FormatAct::AddColumn => table::add_column(doc),
             FormatAct::DeleteRow => table::delete_row(doc),
             FormatAct::DeleteColumn => table::delete_column(doc),
-            FormatAct::Link | FormatAct::PasteImage => {}
+            FormatAct::Link | FormatAct::PasteImage | FormatAct::WorkOnItem => {}
         });
         self.take_insert();
         if act.typing() && sel.is_none() && self.editor.mode != Mode::Insert {
@@ -2016,8 +2064,9 @@ impl App {
             PaletteAct::NewFolder => self.new_folder(),
             PaletteAct::Squash => self.squash(),
             PaletteAct::Quit => self.quit = true,
-            PaletteAct::Press(name) => self.press(name, None),
+            PaletteAct::Press(name) => self.press(&[name]),
             PaletteAct::NoteTab => self.note_tab(),
+            PaletteAct::WorkOnItem => self.work_on_item(),
             PaletteAct::Rename
             | PaletteAct::Move
             | PaletteAct::Pin
@@ -2438,6 +2487,7 @@ impl App {
                 }
                 Effect::Prompt(c) => self.prompt = Some((c, String::new())),
                 Effect::Window(dir) => self.window_move(dir),
+                Effect::WorkOnItem => self.work_on_item(),
             }
         }
     }
@@ -2684,7 +2734,9 @@ fn look_at_tabs(tx: Sender<Msg>) {
             let found = crate::mux::socket::ask_ok(&["list"])
                 .ok()
                 .and_then(|out| serde_json::from_str::<serde_json::Value>(&out).ok())
-                .map(|list| item_tabs_of(&list, wtn_item_of))
+                .map(|list| {
+                    item_tabs_of(&list, |dir| crate::tabs::title::wtn_item_at(Path::new(dir)))
+                })
                 .unwrap_or_default();
             if last.as_ref() != Some(&found) {
                 last = Some(found.clone());
@@ -2695,14 +2747,6 @@ fn look_at_tabs(tx: Sender<Msg>) {
             std::thread::sleep(TABS_EVERY);
         }
     });
-}
-
-/// The item a directory's branch is for, from its repository's git config
-/// read as a file (`branch.<branch>.wtnItem`), for the background look.
-fn wtn_item_of(dir: &str) -> Option<String> {
-    let place = crate::tabs::git::locate(Path::new(dir)).filter(|p| p.on_branch())?;
-    let config = std::fs::read_to_string(place.common_dir.join("config")).ok()?;
-    crate::tabs::title::wtn_item(&config, &place.branch)
 }
 
 /// The tabs working on an item or waiting on you, by the item's first

@@ -5,7 +5,8 @@
 //! checklist items" (wtn-open.zsh) and "Continue shaping Linear tickets"
 //! (shape-open.zsh) ran, as boxes over the workspace rather than popups:
 //! a list to pick a directory from, then what to work on, then a tab for
-//! each.
+//! each. New in the Rust version, Notes' `gw` starts the one item under its
+//! cursor the same way, the note and the item already known.
 //!
 //! The directory list is pick-dir.zsh's: the one you are in first, then
 //! every open tab's, then every one a Claude session ran in, most recent
@@ -37,7 +38,7 @@ use crate::mux::keys::Action;
 use crate::mux::server::{ClientId, Event, Server};
 use crate::mux::{PaneId, TabId};
 use crate::ui::picker::TYPED;
-use crate::ui::{PickItem, Picker};
+use crate::ui::{Confirm, PickItem, Picker};
 use crate::worktree;
 use crate::{paths, platform, settings, util};
 
@@ -49,6 +50,19 @@ fn item_args(line: usize, target: &str) -> Vec<String> {
         args.extend(["--target".to_string(), target.to_string()]);
     }
     args
+}
+
+/// What a note is known by in the repositories its items were started in:
+/// its ID, else its path within the notes folder.
+fn note_key(text: &str, note: &str) -> String {
+    crate::notes::id::in_text(text).unwrap_or_else(|| note.to_string())
+}
+
+/// Keeps `repo` as the one the note `key` names had its items started in,
+/// off the server's task.
+fn keep_note_repo(key: String, repo: &Path) {
+    let repo = repo.to_path_buf();
+    work_recent::in_background(move || work_recent::pick_note_repo(&key, &repo));
 }
 
 /// The rest of a key's work, run back on the server's task.
@@ -792,9 +806,9 @@ impl Server {
                 } else {
                     Vec::new()
                 };
-                (all.is_empty(), items, wholes)
+                (all.is_empty(), items, wholes, note_key(&text, &name))
             },
-            move |server, client, (none, items, wholes)| {
+            move |server, client, (none, items, wholes, key)| {
                 let title = note.strip_suffix(".md").unwrap_or(&note).to_string();
                 if none {
                     server.say(Some(client), &format!("{title} has no unticked items."));
@@ -867,6 +881,7 @@ impl Server {
                     // branch first so Enter lands there as before.
                     let at = repo.clone();
                     server.autopilot_pick_target(client, at, move |server, client, target| {
+                        keep_note_repo(key, &repo);
                         let tabs: Vec<TabId> = chosen
                             .iter()
                             .filter_map(|item| {
@@ -876,6 +891,140 @@ impl Server {
                         server.front(client, &tabs);
                     });
                 });
+            },
+        );
+    }
+
+    /// Notes' `gw` (`press work-on-item <note> <line>`): the unticked
+    /// top-level item on that line of the note, `note` its path within the
+    /// notes folder. A tab already linked to it is offered instead; else
+    /// which repository, the one this note's items were last started in
+    /// first, then "Land on:", and a tab working on it, as M-I's picker opens
+    /// one, brought to the front.
+    pub fn work_on_item(&mut self, client: ClientId, note: String, line: usize) {
+        let here = self
+            .current_pane(client)
+            .and_then(|p| self.panes.get(&p))
+            .and_then(|s| s.pane.cwd())
+            .unwrap_or_else(paths::home);
+        let panes = self.pane_dirs();
+        let file = worktree_from_note::notes_dir().join(&note);
+        let name = note.clone();
+        // The tabs linked to the note, never Notes' own, with what names
+        // their item: `@tab_title` (M-I's and these tabs), `@autopilot_item`,
+        // else their directory's branch, read off the task (a tab /wtn
+        // opened sets neither option).
+        let linked: Vec<(TabId, Option<String>, Option<PathBuf>)> = self
+            .sessions
+            .iter()
+            .flat_map(|s| s.tabs.iter().copied())
+            .filter(|t| {
+                self.tab_opt(*t, "@tab_note").as_deref() == Some(note.as_str())
+                    && self.tab_opt(*t, "@notes").as_deref() != Some("1")
+            })
+            .map(|t| {
+                let named = self
+                    .tab_opt(t, "@tab_title")
+                    .or_else(|| self.tab_opt(t, "@autopilot_item"))
+                    .filter(|v| !v.is_empty());
+                (t, named, self.tab_path(t).map(Path::to_path_buf))
+            })
+            .collect();
+        self.off_task(
+            client,
+            move || {
+                let text = std::fs::read_to_string(&file).ok()?;
+                let key = note_key(&text, &name);
+                let tabs: Vec<(TabId, String)> = linked
+                    .into_iter()
+                    .filter_map(|(tab, named, dir)| {
+                        let item = named
+                            .or_else(|| dir.and_then(|d| crate::tabs::title::wtn_item_at(&d)))?;
+                        Some((tab, item.trim().to_string()))
+                    })
+                    .collect();
+                let mut recent = work_recent::dirs();
+                // A note started before it had an ID was kept by its path,
+                // which wtn then gave one.
+                let last = work_recent::note_repo(&key).or_else(|| work_recent::note_repo(&name));
+                recent.splice(0..0, last);
+                let found = Found {
+                    dirs: offered(&here, &panes, &recent, &recent_session_dirs(), Wanted::Repo),
+                    here,
+                    clipboard: String::new(),
+                };
+                Some((text, key, found, tabs))
+            },
+            move |server, client, read| {
+                let title = note.strip_suffix(".md").unwrap_or(&note).to_string();
+                let Some((text, key, found, tabs)) = read else {
+                    server.say(Some(client), &format!("No note {title}."));
+                    return;
+                };
+                let item = match worktree_from_note::item_at(&text, line) {
+                    Ok(item) => item,
+                    Err(why) => {
+                        server.say(Some(client), &format!("Line {line} of {title} {why}."));
+                        return;
+                    }
+                };
+                let short = crate::tabs::title::short_name(&item.text);
+                let linked = tabs
+                    .iter()
+                    .find(|(t, named)| *named == item.text && server.tabs.contains_key(t))
+                    .map(|(t, _)| *t);
+                if let Some(tab) = linked {
+                    let question = Confirm::new(format!("“{short}” has a tab already. Go to it?"));
+                    server.ask(client, question, move |server, client, yes| {
+                        if yes {
+                            server.go_to_tab(client, tab);
+                        }
+                    });
+                    return;
+                }
+                let ask = format!("Work on “{short}”: the repository");
+                server.ask_dir(
+                    client,
+                    &ask,
+                    found,
+                    Wanted::Repo,
+                    move |server, client, repo, _| {
+                        let (at, name) = (repo.clone(), note.clone());
+                        server.off_task(
+                            client,
+                            move || {
+                                worktree_from_note::unclaimed(&at, &name, &text)
+                                    .iter()
+                                    .any(|i| i.line == line)
+                            },
+                            move |server, client, free| {
+                                if !free {
+                                    server.say(
+                                        Some(client),
+                                        &format!(
+                                            "“{short}” has a worktree in {} already.",
+                                            paths::tilde(&repo)
+                                        ),
+                                    );
+                                    return;
+                                }
+                                let at = repo.clone();
+                                server.autopilot_pick_target(
+                                    client,
+                                    at,
+                                    move |server, client, target| {
+                                        keep_note_repo(key, &repo);
+                                        if let Some(tab) = server
+                                            .open_item_tab(client, &repo, &note, &item, &target)
+                                        {
+                                            server.front(client, &[tab]);
+                                        }
+                                    },
+                                );
+                            },
+                        );
+                    },
+                );
             },
         );
     }
