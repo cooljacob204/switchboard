@@ -143,7 +143,7 @@ fn is_on(value: Option<&String>) -> bool {
 }
 
 /// A path that stays in the notes directory.
-fn in_notes(rel: &str) -> bool {
+pub fn in_notes(rel: &str) -> bool {
     !rel.is_empty() && !rel.starts_with('/') && !rel.split('/').any(|p| p == "..")
 }
 

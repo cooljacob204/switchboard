@@ -459,7 +459,7 @@
     "key": "note_tab_prompt",
     "category": "Notes",
     "label": "Tell a note's new tab its note",
-    "description": "A new tab opened for a note from Notes starts Claude knowing the note's title and file (added to its system prompt, no turn spent), to read only when you ask; off, it starts as any other tab",
+    "description": "A new tab opened for a note from Notes starts Claude knowing the note's title and file (added to its system prompt, no turn spent), to read when you ask, or first while Point Claude at the tab's note is on; off, it starts as any other tab",
     "default": true
   },
   {
@@ -488,6 +488,13 @@
     "category": "Notes",
     "label": "Ask for a tab's note",
     "description": "When M-e brings Notes beside a tab with no note of its own yet, ask which note is the tab's, the likely ones first, and show that note beside it from then on",
+    "default": true
+  },
+  {
+    "key": "tab_note_context",
+    "category": "Notes",
+    "label": "Point Claude at the tab's note",
+    "description": "As a Claude session starts in a tab with a note of its own, tell it the note's path and to read it before its first reply, so the note's standing rules reach every session in the tab, in any repository, while Switchboard loads as a plugin (claude_plugin), whose session-start hook does it; off, a session reads the note only when asked to",
     "default": true
   },
   {
