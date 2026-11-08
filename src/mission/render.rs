@@ -811,6 +811,152 @@ fn board(
     }
 }
 
+/// UX 2.0's PR board: a column per place a PR stands, its name bold with a
+/// dim count, each PR a rounded card of its number in the accent color and
+/// its checks' mark on the top edge, its title, then its repository, review
+/// and place in the queue dimmed; the chosen card's edge in the accent color.
+#[allow(clippy::too_many_arguments)]
+fn pr_cards(
+    view: &View,
+    columns: &[&str],
+    cols: usize,
+    body: usize,
+    m: &Mission,
+    theme: &Theme,
+    top_row: usize,
+    lines: &mut Vec<Line>,
+    hits: &mut Vec<HitBox>,
+) {
+    const TALL: usize = 5;
+    let col_w = (cols / columns.len().max(1)).max(12);
+    let w = col_w - 1;
+    let mut drawn: Vec<Vec<Vec<Span<'static>>>> = Vec::new();
+    for (ci, column) in columns.iter().enumerate() {
+        let items: Vec<(usize, &Item)> = view
+            .data
+            .items
+            .iter()
+            .enumerate()
+            .filter(|(_, i)| i.group.as_deref() == Some(column))
+            .collect();
+        let mut out = vec![
+            fit(
+                vec![
+                    Span::styled(format!(" {column}"), bold(theme.text)),
+                    Span::styled(format!(" {}", items.len()), fg(theme.dim)),
+                ],
+                col_w,
+                Style::new(),
+            ),
+            vec![Span::raw(" ".repeat(col_w))],
+        ];
+        let room = body.saturating_sub(2) / TALL;
+        let chosen_at = items.iter().position(|(i, _)| *i as isize == m.cursor);
+        let first = match chosen_at {
+            Some(c) if c >= room => c + 1 - room,
+            _ => 0,
+        };
+        for (shown, (index, item)) in items.iter().enumerate().skip(first).take(room) {
+            let chosen = *index as isize == m.cursor;
+            let lit = !chosen && m.hover == Some(Spot::Index(*index as isize));
+            let edge = fg(if chosen {
+                ACCENT
+            } else if lit {
+                theme.text
+            } else {
+                theme.faint
+            });
+            let number = format!(" #{} ", item.data["pr"]["number"]);
+            let (mark, mark_color) = match item.data["checks"].as_str() {
+                Some("success") => ("✓", Badge::Done.color()),
+                Some("failure") => ("✕", Some(RED)),
+                Some("pending") => ("◌", Badge::Working.color()),
+                _ => ("", None),
+            };
+            let mark = if mark.is_empty() {
+                String::new()
+            } else {
+                format!(" {mark} ")
+            };
+            let rule = w.saturating_sub(3 + width(&number) + width(&mark));
+            let title = item
+                .title
+                .split_once(' ')
+                .filter(|(n, _)| n.starts_with('#'))
+                .map_or(item.title.as_str(), |(_, t)| t);
+            let inner = w.saturating_sub(4);
+            let side = |text: String, style: Style| {
+                fit(
+                    vec![
+                        Span::styled("│ ", edge),
+                        Span::styled(text::cut(&text, inner), style),
+                    ],
+                    w - 1,
+                    Style::new(),
+                )
+                .into_iter()
+                .chain([Span::styled("│", edge), Span::raw(" ")])
+                .collect::<Vec<_>>()
+            };
+            out.push(vec![
+                Span::styled("╭", edge),
+                Span::styled(number, bold(ACCENT)),
+                Span::styled("─".repeat(rule), edge),
+                Span::styled(mark, fg(mark_color.unwrap_or(theme.dim))),
+                Span::styled("─╮ ", edge),
+            ]);
+            out.push(side(
+                title.to_string(),
+                if chosen {
+                    bold(theme.bright)
+                } else {
+                    fg(theme.text)
+                },
+            ));
+            out.push(side(
+                item.data["meta"].as_str().unwrap_or("").to_string(),
+                fg(theme.dim),
+            ));
+            out.push(vec![
+                Span::styled(format!("╰{}╯", "─".repeat(w.saturating_sub(2))), edge),
+                Span::raw(" "),
+            ]);
+            out.push(vec![Span::raw(" ".repeat(col_w))]);
+            let y = top_row + 2 + (shown - first) * TALL;
+            for dy in 0..TALL - 1 {
+                hits.push(HitBox {
+                    y: (y + dy) as u16,
+                    x0: (ci * col_w) as u16,
+                    x1: (ci * col_w + w).saturating_sub(1) as u16,
+                    spot: Spot::Index(*index as isize),
+                });
+            }
+        }
+        if items.is_empty() {
+            out.push(fit(
+                vec![Span::styled(" none", fg(theme.faint))],
+                col_w,
+                Style::new(),
+            ));
+        }
+        drawn.push(out);
+    }
+    for i in 0..body {
+        let mut spans = Vec::new();
+        for c in &drawn {
+            spans.extend(
+                c.get(i)
+                    .cloned()
+                    .unwrap_or_else(|| vec![Span::raw(" ".repeat(col_w))]),
+            );
+        }
+        lines.push(Line {
+            spans: fit(spans, cols, Style::new()),
+            fill: None,
+        });
+    }
+}
+
 /// When an item happened, shortly, for the column at a row's end; nothing
 /// for one still to come (a meeting), whose time its detail says.
 fn when(item: &Item, now_secs: i64) -> String {
@@ -1368,7 +1514,11 @@ pub fn screen(m: &Mission, cols: usize, rows: usize) -> (Vec<Line>, Vec<HitBox>)
                     }
                     let top = lines.len();
                     let room = rows.saturating_sub(1 + top);
-                    board(v, columns, cols, room, m, theme, top, &mut lines, &mut hits);
+                    if snap.rules.ux2 && v.id == ViewId::Prs {
+                        pr_cards(v, columns, cols, room, m, theme, top, &mut lines, &mut hits);
+                    } else {
+                        board(v, columns, cols, room, m, theme, top, &mut lines, &mut hits);
+                    }
                 }
             } else if v.id == ViewId::Calendar && super::calendar::is_day(v) {
                 let look = super::calendar::Look {
@@ -1783,6 +1933,54 @@ mod tests {
         assert!(text[3].contains("#1 PR 1") && text[3].contains("#2 PR 2"));
         assert!(text[5].contains("#3 PR 3"));
         assert!(hits.iter().any(|h| h.spot == Spot::Index(3)));
+    }
+
+    #[test]
+    fn with_ux2_the_pr_board_draws_each_pr_as_a_card() {
+        let item = |n: u32, column: &str, checks: &str| {
+            Item::new(n.to_string(), format!("#{n} PR {n}"))
+                .detail("w")
+                .group(column)
+                .data(serde_json::json!({
+                    "pr": { "number": n }, "checks": checks, "meta": "w · queue 1",
+                }))
+        };
+        let items = vec![
+            item(1, "In review", "success"),
+            item(2, "In review", "failure"),
+            item(3, "Approved", "pending"),
+        ];
+        let mut m = mission(Vec::new(), vec![list_view(ViewId::Prs, "PRs", items)]);
+        m.snap.rules.ux2 = true;
+        m.view = 1;
+        m.cursor = 1;
+        let (lines, hits) = screen(&m, 150, 24);
+        let text = texts(&lines);
+        assert!(
+            text[1].contains("In review 2") && text[1].contains("Approved 1"),
+            "{}",
+            text[1]
+        );
+        assert!(
+            text[3].contains("╭ #1 ─") && text[3].contains(" ✓ ─╮") && text[3].contains(" ◌ ─╮"),
+            "{}",
+            text[3]
+        );
+        assert!(
+            text[4].contains("│ PR 1") && !text[4].contains("#1"),
+            "{}",
+            text[4]
+        );
+        assert!(text[5].contains("│ w · queue 1"), "{}", text[5]);
+        assert!(text[6].contains("╰─"), "{}", text[6]);
+        assert!(
+            text[8].contains("#2") && text[8].contains(" ✕ "),
+            "{}",
+            text[8]
+        );
+        let edge = lines[8].spans.iter().find(|s| s.content == "╭").unwrap();
+        assert_eq!(edge.style.fg, Some(ACCENT), "the chosen card's edge");
+        assert!(hits.iter().any(|h| h.spot == Spot::Index(1) && h.y == 9));
     }
 
     #[test]

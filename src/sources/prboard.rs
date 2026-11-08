@@ -70,6 +70,20 @@ pub fn item_of(pr: &Value) -> Option<Item> {
     .into_iter()
     .filter(|m| !m.is_empty())
     .collect();
+    // UX 2.0's cards show the checks as a mark of their own, and the rest
+    // on their last line without them.
+    let check = match checks {
+        _ if failing => "failure",
+        "PENDING" => "pending",
+        "SUCCESS" => "success",
+        _ => "",
+    };
+    let meta = marks
+        .iter()
+        .filter(|m| !m.ends_with("checks"))
+        .map(String::as_str)
+        .collect::<Vec<_>>()
+        .join(" · ");
     let state = if failing || changes {
         State::Attention
     } else if text(pr, "/state") == "MERGED" {
@@ -82,7 +96,12 @@ pub fn item_of(pr: &Value) -> Option<Item> {
         .state(state)
         .target(Target::Url(url.to_string()))
         .group(column_of(pr))
-        .data(json!({ "pr": { "number": number, "repo": repo }, "url": url }));
+        .data(json!({
+            "pr": { "number": number, "repo": repo },
+            "url": url,
+            "checks": check,
+            "meta": meta,
+        }));
     item.time = ms_of(pr.get("mergedAt").and_then(Value::as_str));
     Some(item)
 }
@@ -259,6 +278,14 @@ mod tests {
             ("w · ✓ checks · changes requested", State::Attention)
         );
         assert_eq!(items[4].detail, "w · ✓ checks · queue 2");
+        assert_eq!(
+            (
+                items[4].data["checks"].as_str(),
+                items[4].data["meta"].as_str()
+            ),
+            (Some("success"), Some("w · queue 2"))
+        );
+        assert_eq!(items[1].data["checks"], "failure");
         assert_eq!(items[5].state, State::Idle);
         assert_eq!(items[0].data["pr"]["number"], 1);
     }
