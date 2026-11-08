@@ -516,6 +516,79 @@ fn card(
     out
 }
 
+/// A tab's card as UX 2.0 draws it, `w` wide and `h` tall: a rounded box,
+/// its state's mark, number and name on the top edge and its state at the
+/// edge's right end, the last lines of its screen inside, down to a footer
+/// line with its branch dimmed.
+#[allow(clippy::too_many_arguments)]
+fn card_ux2(
+    tab: &TabModel,
+    screen: Option<&super::Screen>,
+    w: usize,
+    h: usize,
+    chosen: bool,
+    hovered: bool,
+    frame: usize,
+    r: &Rules,
+    theme: &Theme,
+) -> Vec<Vec<Span<'static>>> {
+    let inner = w.saturating_sub(4);
+    let state = model::badge_state(tab, r);
+    let color = state.color().unwrap_or(theme.dim);
+    let edge = if chosen {
+        fg(ACCENT)
+    } else if hovered {
+        fg(tab.color.map(Color::from).unwrap_or(theme.bright))
+    } else {
+        fg(theme.faint)
+    };
+    let words = text::cut(&model::state_words(tab, r), inner / 3);
+    let right = vec![
+        Span::styled(format!(" {words} "), fg(color)),
+        Span::styled("─╮", edge),
+    ];
+    let index = tab.index.to_string();
+    let room = w.saturating_sub(spans_width(&right) + 2 + 4 + width(&index) + 2);
+    let mut top = vec![
+        Span::styled("╭─", edge),
+        Span::raw(" "),
+        badge(state, frame, theme),
+        Span::raw(" "),
+        Span::styled(index, bold(theme.bright)),
+        Span::raw(" "),
+        Span::styled(text::cut(&tab.name, room), bold(theme.bright)),
+        Span::raw(" "),
+    ];
+    let used = spans_width(&top) + spans_width(&right);
+    top.push(Span::styled("─".repeat(w.saturating_sub(used)), edge));
+    top.extend(right);
+    let mut out = vec![fit(top, w, Style::new())];
+    let side = |line: Vec<Span<'static>>| {
+        let mut row = vec![Span::styled("│", edge), Span::raw(" ")];
+        row.extend(fit(line, inner, Style::new()));
+        row.push(Span::raw(" "));
+        row.push(Span::styled("│", edge));
+        row
+    };
+    // The screen's last lines, down to the footer.
+    let room = h.saturating_sub(3);
+    let lines: &[String] = screen.map_or(&[], |s| &s.lines);
+    let shown = &lines[lines.len().saturating_sub(room)..];
+    for _ in shown.len()..room {
+        out.push(side(Vec::new()));
+    }
+    for line in shown {
+        out.push(side(vec![Span::styled(line.clone(), fg(theme.text))]));
+    }
+    let branch = screen.and_then(|s| s.branch.clone()).unwrap_or_default();
+    out.push(side(vec![Span::styled(branch, fg(theme.dim))]));
+    out.push(vec![Span::styled(
+        format!("╰{}╯", "─".repeat(w.saturating_sub(2))),
+        edge,
+    )]);
+    out
+}
+
 /// The tabs' cards in their stages' boxes, scrolled to keep the chosen card
 /// in view, and where each card's cells are.
 fn cards(
@@ -557,7 +630,15 @@ fn cards(
             .blocks
             .iter()
             .flat_map(|b| b.cards.iter())
-            .map(|&i| card_needs(&snap.tabs[g.order[i]], cw, r, theme))
+            .map(|&i| {
+                let tab = &snap.tabs[g.order[i]];
+                if r.ux2 {
+                    // A screen fills whatever room the card has.
+                    usize::MAX
+                } else {
+                    card_needs(tab, cw, r, theme)
+                }
+            })
             .max()
             .unwrap_or(6);
         let height = shelf.rows * most.min(tallest.max(6));
@@ -591,16 +672,24 @@ fn cards(
                             x + (c + 1) * cw,
                             i,
                         ));
-                        card(
-                            &snap.tabs[g.order[i]],
-                            cw,
-                            h,
-                            i as isize == m.cursor,
-                            m.hover == Some(Spot::Index(i as isize)),
-                            snap.frame,
-                            r,
-                            theme,
-                        )
+                        let tab = &snap.tabs[g.order[i]];
+                        let chosen = i as isize == m.cursor;
+                        let hovered = m.hover == Some(Spot::Index(i as isize));
+                        if r.ux2 {
+                            card_ux2(
+                                tab,
+                                snap.screens.get(&tab.id),
+                                cw,
+                                h,
+                                chosen,
+                                hovered,
+                                snap.frame,
+                                r,
+                                theme,
+                            )
+                        } else {
+                            card(tab, cw, h, chosen, hovered, snap.frame, r, theme)
+                        }
                     })
                     .collect();
                 for line in 0..h {
@@ -1779,6 +1868,7 @@ mod tests {
             now_secs: rules().now_secs(),
             tz: jiff::tz::TimeZone::UTC,
             frame: 0,
+            screens: Default::default(),
             pilot: None,
         };
         m
@@ -1963,6 +2053,34 @@ mod tests {
             text.iter().any(|l| l.contains("/work")),
             "a card with no Claude shows its directory"
         );
+    }
+
+    #[test]
+    fn with_ux2_a_card_shows_its_screen_its_state_on_the_edge_and_its_branch() {
+        let mut working = tab(3, "M-d uncommitted");
+        working.state = TabState::Working;
+        let mut m = mission(vec![working], Vec::new());
+        m.snap.rules.ux2 = true;
+        m.snap.screens.insert(
+            TabId(3),
+            crate::mission::Screen {
+                lines: (1..=40).map(|n| format!("line {n}")).collect(),
+                branch: Some("md-uncommitted".into()),
+            },
+        );
+        let (lines, _) = screen(&m, 3 * 56, 30);
+        let text = texts(&lines);
+        let top = text
+            .iter()
+            .position(|l| l.contains("3 M-d uncommitted"))
+            .unwrap();
+        assert!(text[top].contains(" working"), "{text:#?}");
+        assert!(text[top].trim_end().ends_with("─╮│"), "{text:#?}");
+        let bottom = top + text[top..].iter().position(|l| l.contains("╰")).unwrap();
+        // The screen's last line just above the footer with the branch.
+        assert!(text[bottom - 1].contains("md-uncommitted"), "{text:#?}");
+        assert!(text[bottom - 2].contains("line 40"), "{text:#?}");
+        assert!(!text.iter().any(|l| l.contains("line 1 ")));
     }
 
     // test/tmux-sidebar.test.js's "while a note is worked continuously,

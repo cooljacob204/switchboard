@@ -306,11 +306,56 @@ impl Server {
         }
     }
 
+    /// Each tab's screen for UX 2.0's cards: the last lines of its Claude's
+    /// pane (else its active one), from the pane's grid in memory, and the
+    /// branch its directory was last named on.
+    fn mission_screens(&self) -> std::collections::HashMap<TabId, super::Screen> {
+        self.tabs
+            .iter()
+            .map(|(&id, tab)| {
+                let pane = self
+                    .sidebar
+                    .panes
+                    .iter()
+                    .find(|(p, r)| r.claude && tab.layout.panes().contains(p))
+                    .map_or(tab.active, |(p, _)| *p);
+                let text = self
+                    .panes
+                    .get(&pane)
+                    .map(|slot| slot.pane.text(0))
+                    .unwrap_or_default();
+                let branch = self
+                    .tab_path(id)
+                    .and_then(|p| self.tab_names.names.branch(p))
+                    .map(str::to_string);
+                let lines = text.lines().map(str::to_string).collect();
+                (id, super::Screen { lines, branch })
+            })
+            .collect()
+    }
+
     /// Puts together what a client's mission control shows, and does what
     /// bringing a view to the front does.
     fn mission_prepare(&mut self, client: ClientId) {
         let Some((cols, rows)) = self.clients.get(&client).map(|c| (c.cols, c.rows)) else {
             return;
+        };
+        // With UX 2.0 it fills the session's main area, header included,
+        // leaving the sidebar showing on its left.
+        let ux2 = settings::is_on("ux2");
+        let left = if ux2 {
+            self.clients
+                .get(&client)
+                .and_then(|c| self.session(&c.session))
+                .map_or(0, |s| s.main_area().x)
+                .min(cols.saturating_sub(1))
+        } else {
+            0
+        };
+        let screens = if ux2 {
+            self.mission_screens()
+        } else {
+            Default::default()
         };
         // A box over mission control, other than the busy box.
         let boxed = self
@@ -391,6 +436,7 @@ impl Server {
             now_secs: now.div_euclid(1000),
             tz: jiff::tz::TimeZone::system(),
             frame,
+            screens,
             // Not in M-j's and M-o's pickers.
             pilot: m
                 .scope
@@ -398,7 +444,8 @@ impl Server {
                 .then(|| self.autopilot_summary())
                 .flatten(),
         };
-        m.size = (cols, rows);
+        m.size = (cols - left, rows);
+        m.left = left;
         if m.view > m.snap.views.len() {
             m.view = 0;
         }
@@ -1195,6 +1242,12 @@ impl Server {
         let Some(m) = self.mission_mut(client) else {
             return;
         };
+        // Its parts were drawn from the sidebar's edge (UX 2.0); over the
+        // sidebar, a click lands on nothing.
+        let Some(col) = mouse.col.checked_sub(m.left) else {
+            return;
+        };
+        let mouse = Mouse { col, ..mouse };
         match mouse_in(m, mouse, look.hover) {
             Then::Nothing => {}
             Then::Redraw => self.mission_dirty(client),
