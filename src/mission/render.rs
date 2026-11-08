@@ -1379,6 +1379,7 @@ pub fn screen(m: &Mission, cols: usize, rows: usize) -> (Vec<Line>, Vec<HitBox>)
                     now_ms: snap.now_secs * 1000,
                     theme,
                     top_row: lines.len(),
+                    ux2: crate::settings::is_on("ux2"),
                 };
                 let (day, at) = super::calendar::day(v, &look);
                 lines.extend(day);

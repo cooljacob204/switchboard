@@ -265,7 +265,8 @@ Settings' "UX 2.0" (`ux2`, off by default) is a new look being built a part at a
 - shows the PR description (`M-v`) and the ticket (`M-i`) in Claude's place, as `M-d` shows the diff, rather than beside it, the same key putting Claude back;
 - starts the sidebar with how many tabs there are and `/ filter`, in place of the session's name and the counts, and its notifications under that, a line each, gone when there are none, in place of their section at the bottom;
 - draws each group's heading in its color, bold, its count at the right edge, and each tab in two lines: its state's mark with no pill, its number in its project's color and its name on one line, then what it is doing; the cursor's tab shaded with a bar at its left, no rule between tabs, and the keys that start, find and walk tabs (`M-t`, `M-j`, `M-a`) on the sidebar's last row;
-- draws the pinned, reminder and pending-checks marks as symbols of your terminal's font (▲ ◷ ◌) in place of emoji (📌 ⏰ ⏳), one column each.
+- draws the pinned, reminder and pending-checks marks as symbols of your terminal's font (▲ ◷ ◌) in place of emoji (📌 ⏰ ⏳), one column each;
+- draws mission control's Calendar view as a timeline: the hours down the left, three rows an hour, each labelled dim and right-aligned with a dashed rule across; each event a block the height of its length with a bar in its color, its title bold and its time and where to join dim, one already over dimmed and struck through; now as a red line with its time; and, on a screen 100 columns wide or more, the event under the cursor beside the day, with your reply, the link to join and the tickets and PRs it names.
 
 A pane zoomed with `M-=` covers the header, as it covers the sidebar. With `ux2` off, the status line, the sidebar and those keys are as before.
 
