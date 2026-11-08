@@ -1167,7 +1167,7 @@ Once all of it is there, running the part again changes nothing. A permission or
 
 ### Your CLAUDE.md
 
-Switchboard's part of Claude's instructions is what every user's Claude needs to know about the workspace (the notes app, `switchboard tabs` for what the other tabs are doing, how to talk to another tab and name one, a repository's own skills). As a plugin, the plugin's start-of-session hook gives it to the Claude in Switchboard's panes, and your CLAUDE.md doesn't import it. With the plugin off, the `claude-md` part writes it to `~/.local/share/switchboard/switchboard.md` and your `~/.claude/CLAUDE.md` imports it with a line of its own, which Claude Code follows (`@path`). Either way a new version takes effect with the next session.
+Switchboard's part of Claude's instructions is what every user's Claude needs to know about the workspace (the notes app and which note is the tab's own, `switchboard tabs` for what the other tabs are doing, how to talk to another tab and name one, a repository's own skills). As a plugin, the plugin's start-of-session hook gives it to the Claude in Switchboard's panes, and your CLAUDE.md doesn't import it. With the plugin off, the `claude-md` part writes it to `~/.local/share/switchboard/switchboard.md` and your `~/.claude/CLAUDE.md` imports it with a line of its own, which Claude Code follows (`@path`). Either way a new version takes effect with the next session.
 
 Your own rules come from where `~/.config/switchboard/claude.json` says, a git repository or a file, which Settings' "Your CLAUDE.md" row writes for you (and then runs this part):
 
