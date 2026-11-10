@@ -26,7 +26,7 @@
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
+use std::process::{Command, ExitStatus, Output, Stdio};
 
 use anyhow::{Context, Result, bail};
 
@@ -162,6 +162,18 @@ impl Ssh {
             c.arg(quoted(a)?);
         }
         self.run(c, script.as_bytes())
+    }
+
+    /// Runs `words` there on this terminal, with a terminal of its own there
+    /// (`-t`), for what asks you questions: the host's guided setup.
+    pub fn interactive(&self, words: &[&str]) -> Result<ExitStatus> {
+        crate::requests::count("SSH", "ssh", "switchboard ssh");
+        let mut c = self.through();
+        c.arg("-t").arg(&self.host);
+        for w in words {
+            c.arg(quoted(w)?);
+        }
+        c.status().context("couldn't run ssh")
     }
 
     /// Copies `bytes` into the file at `path` there (one `PREPARE` made,

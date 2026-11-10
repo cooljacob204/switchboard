@@ -2,9 +2,9 @@
 //! remote gets the links, copies and notifications made in the workspace
 //! and is asked to forward the ports its panes listen on; and `switchboard
 //! ssh`, through a strict stand-in for ssh whose host is a second home of
-//! the test's own, installs this build there, starts the host's server and
-//! attaches to it, forwarding a port, opening a link here, and stopping its
-//! forwards as it detaches.
+//! the test's own, installs this build there, runs its guided setup in the
+//! terminal, starts the host's server and attaches to it, forwarding a
+//! port, opening a link here, and stopping its forwards as it detaches.
 
 use crate::common;
 
@@ -297,8 +297,18 @@ fn host_list(socket: &Path) -> Option<Value> {
         .flatten()
 }
 
-#[test]
-fn switchboard_ssh_installs_this_build_attaches_forwards_and_opens_links_here() {
+/// A workspace here, a host for it to reach as `devbox` (a second home of
+/// the test's own, its settings quiet), the ssh stand-in's log, and the
+/// host's socket, its server ended with the test.
+struct Remote {
+    local: TestServer,
+    host: PathBuf,
+    log: PathBuf,
+    socket: PathBuf,
+    _server: HostServer,
+}
+
+fn with_a_host() -> Remote {
     let local = TestServer::start();
     let host = local.dir.path().join("host");
     std::fs::create_dir_all(&host).unwrap();
@@ -306,18 +316,44 @@ fn switchboard_ssh_installs_this_build_attaches_forwards_and_opens_links_here() 
     common::write_settings(&host, json!({}));
     let log = local.dir.path().join("ssh-log");
     stand_in::ssh(&local.home.join("bin"), &["devbox"], &host, &log);
-    let host_socket = host.join(".local/state/switchboard/sock");
-    let _host_server = HostServer(host_socket.clone());
+    let socket = host.join(".local/state/switchboard/sock");
+    Remote {
+        local,
+        host,
+        log,
+        socket: socket.clone(),
+        _server: HostServer(socket),
+    }
+}
 
+/// Whether the host's server has this terminal attached as remote.
+fn attached_remote(socket: &Path) -> bool {
+    host_list(socket).is_some_and(|l| l["clients"][0]["remote"] == true)
+}
+
+#[test]
+fn switchboard_ssh_installs_this_build_attaches_forwards_and_opens_links_here() {
+    let Remote {
+        local,
+        host,
+        log,
+        socket: host_socket,
+        _server,
+    } = with_a_host();
     let mut client = local.attach(150, 40);
     client.wait_text("$");
     type_line(&local, &format!("{BIN} ssh devbox"));
     client.wait_text("install it in ~/.local/bin?");
     type_line(&local, "");
+    // A first install: its guided setup, run there in this terminal.
+    client.wait_text("Run Switchboard's setup on devbox now?");
+    type_line(&local, "");
+    client.wait_text("Add Switchboard's statusline and permissions");
+    type_line(&local, "");
     // Installed, its server started, and this terminal attached to it as
     // remote.
     client.wait_for("the host's server with a remote client", |_| {
-        host_list(&host_socket).is_some_and(|l| l["clients"][0]["remote"] == true)
+        attached_remote(&host_socket)
     });
     let installed = Command::new(host.join(".local/bin/switchboard"))
         .arg("--version")
@@ -325,9 +361,12 @@ fn switchboard_ssh_installs_this_build_attaches_forwards_and_opens_links_here() 
         .unwrap();
     let mine = Command::new(BIN).arg("--version").output().unwrap();
     assert_eq!(installed.stdout, mine.stdout, "this build, exactly");
+    // Its guided setup ran there, the statusline said yes to.
+    let claude_settings =
+        std::fs::read_to_string(host.join(".claude/settings.json")).unwrap_or_default();
     assert!(
-        host.join(".local/share/switchboard/plugin").exists(),
-        "its setup ran there"
+        claude_settings.contains("switchboard statusline"),
+        "its setup ran there: {claude_settings}"
     );
     // What the pane shows is the host's workspace.
     let tab = host_list(&host_socket).unwrap()["sessions"][0]["tabs"][0]["id"]
@@ -403,4 +442,58 @@ fn switchboard_ssh_installs_this_build_attaches_forwards_and_opens_links_here() 
         host_list(&host_socket).is_some(),
         "the host's server goes on"
     );
+}
+
+#[test]
+fn a_first_install_whose_setup_is_said_no_to_attaches_without_it() {
+    let r = with_a_host();
+    let mut client = r.local.attach(150, 40);
+    client.wait_text("$");
+    type_line(&r.local, &format!("{BIN} ssh devbox"));
+    client.wait_text("install it in ~/.local/bin?");
+    type_line(&r.local, "");
+    client.wait_text("Run Switchboard's setup on devbox now?");
+    type_line(&r.local, "n");
+    client.wait_for("attached without the setup", |_| attached_remote(&r.socket));
+    // Detached, the pane shows again what it said before attaching.
+    on_host(&r.socket, &["detach"]);
+    client.wait_text("[detached]");
+    client.wait_text("Run switchboard setup in a tab there when you want it.");
+    assert!(
+        !r.host.join(".claude/settings.json").exists(),
+        "nothing of the setup's asked parts was done"
+    );
+}
+
+#[test]
+fn a_box_with_another_build_gets_this_one_without_its_setup_offered_again() {
+    let r = with_a_host();
+    // An older build there, which says its version and does nothing else.
+    stand_in::install(
+        &r.host.join(".local/bin/switchboard"),
+        "#!/bin/sh\n[ \"$1\" = --version ] && echo 'switchboard 0.0.1 (000000000000)'\nexit 1\n",
+    );
+    let mut client = r.local.attach(150, 40);
+    client.wait_text("$");
+    type_line(&r.local, &format!("{BIN} ssh devbox"));
+    client.wait_text("devbox has Switchboard 0.0.1 (000000000000), not");
+    type_line(&r.local, "");
+    client.wait_for("attached on this build", |_| attached_remote(&r.socket));
+    // Detached, the pane shows again what it said before attaching.
+    on_host(&r.socket, &["detach"]);
+    let screen = client.wait_text("[detached]").join("\n");
+    assert!(
+        screen.contains("Installed Switchboard"),
+        "what it said is on the screen: {screen}"
+    );
+    assert!(
+        !screen.contains("Run Switchboard's setup"),
+        "an update offers no setup: {screen}"
+    );
+    let installed = Command::new(r.host.join(".local/bin/switchboard"))
+        .arg("--version")
+        .output()
+        .unwrap();
+    let mine = Command::new(BIN).arg("--version").output().unwrap();
+    assert_eq!(installed.stdout, mine.stdout);
 }

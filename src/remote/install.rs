@@ -290,12 +290,6 @@ place "$new" "$1" any
     )
 }
 
-/// The host's own setup, each part by name, asking nothing: the plugin
-/// its panes' Claude loads, Claude Code's statusline and permissions,
-/// Switchboard's part of CLAUDE.md and the skills.
-pub const SETUP: &str =
-    r#""$HOME/.local/bin/switchboard" setup plugin claude claude-md skills </dev/null"#;
-
 /// The host's server restarted on the binary just put in place, keeping
 /// every tab (src/mux/upgrade.rs).
 pub const UPGRADE: &str = r#""$HOME/.local/bin/switchboard" upgrade </dev/null"#;

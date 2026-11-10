@@ -4,8 +4,9 @@
 //! It opens one SSH connection to the host with the system's `ssh`
 //! (src/remote/ssh.rs), so your SSH configuration applies; asks the host
 //! what it has (src/remote/install.rs) and, when it lacks this build,
-//! offers to put it in `~/.local/bin` there and runs its setup; offers to
-//! restart a server already running there on another build; starts the
+//! offers to put it in `~/.local/bin` there; on a first install, offers to
+//! run the host's guided setup in this terminal; offers to restart a server
+//! already running there on another build; starts the
 //! host's server when none runs (`switchboard remote-server` there),
 //! forwards its socket to one here, private to you, and attaches this
 //! terminal to it as a remote client, which opens the workspace's links,
@@ -208,15 +209,14 @@ fn prepare(ssh: &Ssh) -> Result<()> {
                 }
             };
             println!("Installed Switchboard {said} in ~/.local/bin on {name}.");
-            let out = ssh.script(install::SETUP, &[])?;
-            for l in String::from_utf8_lossy(&out.stdout)
-                .lines()
-                .chain(String::from_utf8_lossy(&out.stderr).lines())
-            {
-                println!("  {l}");
-            }
-            if !out.status.success() {
-                println!("Its setup reported a failure above; attaching anyway.");
+            // A first install offers the host's guided setup, which asks
+            // before each part as it does here. An update needs none: the
+            // new build brings the parts already set up there up to date as
+            // its `remote-server` runs (`setup::refresh`), as a new build
+            // attaching does here. Nothing of your own files is copied: the
+            // host's settings are its own.
+            if host.binary.is_none() {
+                guided_setup(ssh, &host.home)?;
             }
             installed = true;
         }
@@ -245,6 +245,30 @@ fn prepare(ssh: &Ssh) -> Result<()> {
                 "Attaching to it as it is: its links and ports stay on {name} until its server restarts on this build."
             );
         }
+    }
+    Ok(())
+}
+
+/// Asks whether to run the host's guided setup (`switchboard setup`) now,
+/// and runs it in this terminal, its questions asked and answered here;
+/// one that doesn't finish is said, and the attachment goes on.
+fn guided_setup(ssh: &Ssh, home: &str) -> Result<()> {
+    let name = &ssh.host;
+    if !ask(&format!(
+        "Run Switchboard's setup on {name} now? It asks before each part, as switchboard setup does here."
+    )) {
+        println!("Run switchboard setup in a tab there when you want it.");
+        return Ok(());
+    }
+    if home.is_empty() {
+        bail!("{name} didn't say where its home is");
+    }
+    let binary = format!("{home}/.local/bin/switchboard");
+    let status = ssh.interactive(&[&binary, "setup"])?;
+    if !status.success() {
+        println!(
+            "Its setup didn't finish; attaching anyway. Run switchboard setup in a tab there to finish it."
+        );
     }
     Ok(())
 }
