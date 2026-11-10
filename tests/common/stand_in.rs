@@ -1844,3 +1844,144 @@ exec sleep 60
 pub fn lazygit(bin: &Path) -> PathBuf {
     install_in(bin, "lazygit", &LAZYGIT.replace("@CHECKED@", CHECKED))
 }
+
+// ── ssh ─────────────────────────────────────────────────────────────────────
+
+const SSH: &str = r#"#!/bin/sh
+# A stand-in for OpenSSH's ssh (tests/common/stand_in.rs), as `switchboard
+# ssh` uses it: a master connection (-M -S <socket> ... -f -N <host>), and
+# through it (-S <socket>) a command run there, a control command (-O check,
+# forward, cancel, exit). Its options are read as ssh reads them, with ssh's
+# words for what it refuses. The host is a home of the test's own: a command
+# runs there in sh with that HOME, nothing of the test's Switchboard in its
+# environment. A socket forwarded (-L <path>:<path>) is a link from the one
+# here to the one there, which connects the same; a port forwarded
+# (-L 127.0.0.1:<port>:<host>:<port>) is written down in the log, as every
+# call is.
+@PROLOGUE@
+log=@LOG@
+host_home=@HOST_HOME@
+printf '%s\n' "$stand_in_call" >> "$log"
+usage() {
+  printf 'usage: ssh [-46AaCfGgKkMNnqsTtVvXxYy] [-B bind_interface] [-b bind_address]\n           [-c cipher_spec] [-D [bind_address:]port] [-E log_file]\n           [-e escape_char] [-F configfile] [-I pkcs11] [-i identity_file]\n           [-J destination] [-L address] [-l login_name] [-m mac_spec]\n           [-O ctl_cmd] [-o option] [-P tag] [-p port] [-R address]\n           [-S ctl_path] [-W host:port] [-w local_tun[:remote_tun]]\n           destination [command [argument ...]]\n' >&2
+  exit 255
+}
+master=; control=; forks=; no_command=; ctl=; forward=; config=
+while getopts ':1246ab:c:e:fgi:kl:m:no:p:qstvxAB:CD:E:F:GI:J:KL:MNO:P:Q:R:S:TVw:W:XYy' opt; do
+  case $opt in
+    M) master=yes ;;
+    S) control=$OPTARG ;;
+    f) forks=yes ;;
+    N) no_command=yes ;;
+    F) config=$OPTARG ;;
+    O)
+      case $OPTARG in
+        check | forward | cancel | exit | stop | proxy) ctl=$OPTARG ;;
+        *)
+          wrong "-O $OPTARG isn't a control command"
+          printf 'Invalid multiplex command.\n' >&2
+          exit 255 ;;
+      esac ;;
+    L)
+      case $OPTARG in
+        /*:/*) forward=$OPTARG ;;
+        *:*:*:* | [0-9]*:*:[0-9]*) forward=$OPTARG ;;
+        *)
+          wrong "-L $OPTARG isn't a forward"
+          printf 'Bad local forwarding specification '"'"'%s'"'"'\n' "$OPTARG" >&2
+          exit 255 ;;
+      esac ;;
+    o)
+      case $OPTARG in
+        ControlPersist=* | ServerAliveInterval=* | ServerAliveCountMax=* | RemoteCommand=* | RequestTTY=* | BatchMode=* | ControlMaster=* | Port=* | User=*) ;;
+        *)
+          wrong "-o $OPTARG isn't an option ssh has"
+          printf 'command-line: line 0: Bad configuration option: %s\n' "${OPTARG%%=*}" >&2
+          exit 255 ;;
+      esac ;;
+    \?)
+      wrong "-$OPTARG isn't an option ssh has"
+      printf 'ssh: illegal option -- %s\n' "$OPTARG" >&2
+      usage ;;
+    :)
+      wrong "-$OPTARG needs a value"
+      printf 'ssh: option requires an argument -- %s\n' "$OPTARG" >&2
+      usage ;;
+    *) ;;
+  esac
+done
+shift $((OPTIND - 1))
+[ $# -gt 0 ] || { wrong 'no destination'; usage; }
+host=$1
+shift
+case $host in
+  @HOSTS@) ;;
+  *)
+    printf 'ssh: Could not resolve hostname %s: Name or service not known\r\n' "$host" >&2
+    exit 255 ;;
+esac
+if [ -n "$config" ] && [ "$config" != /dev/null ] && [ ! -r "$config" ]; then
+  printf 'Can'"'"'t open user config file %s: No such file or directory\n' "$config" >&2
+  exit 255
+fi
+if [ -n "$forks" ] && [ -z "$no_command" ] && [ $# -eq 0 ]; then
+  wrong '-f with no command and no -N'
+  printf 'Cannot fork into background without a command to execute.\n' >&2
+  exit 255
+fi
+if [ -n "$master" ]; then
+  [ -n "$control" ] || { wrong '-M with no control socket (-S)'; exit 255; }
+  [ -z "$ctl" ] || { wrong '-M with -O'; exit 255; }
+  : > "$control"
+  exit 0
+fi
+if [ -n "$ctl" ]; then
+  [ -n "$control" ] || { wrong "-O $ctl with no control socket (-S)"; exit 255; }
+  if [ ! -e "$control" ]; then
+    printf 'Control socket connect(%s): No such file or directory\r\n' "$control" >&2
+    exit 255
+  fi
+  case $ctl in
+    check) printf 'Master running (pid=%s)\r\n' "$$" >&2 ;;
+    exit | stop) rm -f "$control"; printf 'Exit request sent.\r\n' >&2 ;;
+    forward | cancel)
+      [ -n "$forward" ] || { wrong "-O $ctl with no -L"; exit 255; }
+      case $forward in
+        /*:/*)
+          here=${forward%%:*}
+          there=${forward#*:}
+          if [ "$ctl" = forward ]; then
+            if [ -e "$here" ] || [ -L "$here" ]; then
+              wrong "$here is there already"
+              printf 'mux_client_forward: forwarding request failed: Port forwarding failed\r\n' >&2
+              exit 255
+            fi
+            ln -s "$there" "$here"
+          else
+            rm -f "$here"
+          fi ;;
+      esac ;;
+  esac
+  exit 0
+fi
+# A command run there, through the master.
+if [ -n "$control" ] && [ ! -e "$control" ]; then
+  wrong "a command with no master up at $control"
+  printf 'Permission denied (publickey).\r\n' >&2
+  exit 255
+fi
+[ $# -gt 0 ] || { wrong 'no command to run, and no tty in a test'; exit 255; }
+cd "$host_home" || exit 255
+exec env -u SWITCHBOARD -u SWITCHBOARD_PANE -u SWITCHBOARD_STATE_DIR -u SWITCHBOARD_SETTINGS \
+  HOME="$host_home" PATH="$host_home/bin:$PATH" /bin/sh -c "$*"
+"#;
+
+/// A stand-in ssh reaching `hosts` (names, as an alias of an SSH
+/// configuration), each of them `host_home`: every call written to `log`.
+pub fn ssh(bin: &Path, hosts: &[&str], host_home: &Path, log: &Path) -> PathBuf {
+    let text = SSH
+        .replace("@LOG@", &quoted(log))
+        .replace("@HOST_HOME@", &quoted(host_home))
+        .replace("@HOSTS@", &hosts.join(" | "));
+    install_in(bin, "ssh", &text)
+}

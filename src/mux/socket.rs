@@ -310,7 +310,7 @@ fn exchange(stream: &mut UnixStream, msg: &ClientMsg) -> Result<(i32, Vec<u8>, V
                     message.unwrap_or_else(|| "the server ended the command".into())
                 ));
             }
-            Ok(Some(ServerMsg::Output(_))) => {}
+            Ok(Some(ServerMsg::Output(_) | ServerMsg::Desk(_))) => {}
             Ok(None) => bail!("the server closed the connection without an answer"),
             Err(e) => bail!("the server's answer couldn't be read: {e}"),
         }

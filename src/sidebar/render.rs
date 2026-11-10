@@ -950,6 +950,14 @@ pub fn sidebar_lines(
                     lines.push(kit_row(second));
                     owners.push(Some(Owner::Tab(tab.id)));
                 }
+                // A remote workspace's ports, on a line of their own.
+                if let Some(ports) = &tab.ports {
+                    let mut row = Row::default();
+                    row.put("    ", Style::new())
+                        .put(text::cut(ports, cols.saturating_sub(6)), fg(theme.dim));
+                    lines.push(kit_row(row));
+                    owners.push(Some(Owner::Tab(tab.id)));
+                }
                 if chosen {
                     cursor_end = lines.len() - 1;
                 }
@@ -1070,6 +1078,14 @@ pub fn sidebar_lines(
                         row.put(detail, fg(color));
                     }
                 }
+                tab_lines.push(row.fit(cols, fill));
+            }
+            // A remote workspace's ports, on a line of their own.
+            if let Some(ports) = &tab.ports {
+                let mut row = Row::default();
+                row.put(bar.0, bar.1)
+                    .put("     ", Style::new())
+                    .put(text::cut(ports, cols.saturating_sub(6)), fg(theme.dim));
                 tab_lines.push(row.fit(cols, fill));
             }
             for line in tab_lines {

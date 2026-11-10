@@ -16,6 +16,11 @@
 //! raw. The first thread to finish says why, and the main thread puts the
 //! terminal back and reports it.
 //!
+//! A client attached through `switchboard ssh` (`attach_remote`) also does
+//! what the server asks of the computer it is on (`Desk`: open a link, copy,
+//! notify, forward a port), each on a thread of its own so the screen never
+//! waits on it, sending back what it answers (src/remote).
+//!
 //! Putting the terminal back happens once, from whichever comes first: the
 //! guard's drop on the way out (a panic's unwinding included), or the panic
 //! hook, which runs before unwinding so the panic's message lands on the
@@ -29,14 +34,22 @@ use std::io::{self, Read, Write};
 use std::net::Shutdown;
 use std::os::fd::{AsRawFd, BorrowedFd, OwnedFd, RawFd};
 use std::os::unix::net::UnixStream;
+use std::path::Path;
 use std::process::ExitCode;
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::{Arc, Mutex, Once, mpsc};
 
 use anyhow::{Context, Result, bail};
 
-use super::proto::{self, ClientMsg, ServerMsg};
+use super::proto::{self, ClientMsg, Desk, ServerMsg};
 use super::socket;
+
+/// What a client attached from another computer does with what the server
+/// asks of the computer it is on (src/remote, src/cmd/ssh.rs).
+pub trait Desktop: Send + Sync {
+    /// Does `ask` here, giving what to answer the server, if anything.
+    fn act(&self, ask: Desk) -> Option<ClientMsg>;
+}
 
 /// Turned on once the terminal is raw: the alternate screen, mouse presses
 /// and drags in SGR form, focus in and out, and bracketed paste.
@@ -164,6 +177,55 @@ pub fn attach(session: Option<String>) -> Result<ExitCode> {
         bail!("already inside Switchboard");
     }
     let stream = socket::connect_or_start()?;
+    match attach_with(stream, session, None)? {
+        End::Exit(message) => {
+            if let Some(message) = message {
+                println!("{message}");
+            }
+            Ok(ExitCode::SUCCESS)
+        }
+        End::StdinClosed | End::TerminalGone => Ok(ExitCode::SUCCESS),
+        End::ServerGone => bail!("the server went away"),
+        End::Signal(sig) => Ok(ExitCode::from(128 + sig.clamp(0, 127) as u8)),
+    }
+}
+
+/// How an attachment from another computer ended (`attach_remote`).
+#[derive(Debug, PartialEq, Eq)]
+pub enum Ended {
+    /// The server said to end, with this to say (detached, or it ended).
+    Exit(Option<String>),
+    /// You left: the terminal closed, or a signal (its number) ended it.
+    Left(Option<i32>),
+    /// The connection went without a word: the network, or the server died.
+    Lost,
+}
+
+/// Attaches this terminal to the server forwarded to `socket` from another
+/// computer (`switchboard ssh`), saying so as it attaches, `desktop` doing
+/// what the server asks of this computer. It runs inside a Switchboard pane
+/// too, since a workspace on another computer doesn't draw itself.
+pub fn attach_remote(socket: &Path, desktop: Arc<dyn Desktop>) -> Result<Ended> {
+    if !is_tty(libc::STDIN_FILENO) || !is_tty(libc::STDOUT_FILENO) {
+        bail!("switchboard ssh needs a terminal");
+    }
+    let stream = UnixStream::connect(socket).context("the forwarded server doesn't answer")?;
+    Ok(match attach_with(stream, None, Some(desktop))? {
+        End::Exit(message) => Ended::Exit(message),
+        End::StdinClosed | End::TerminalGone => Ended::Left(None),
+        End::Signal(sig) => Ended::Left(Some(sig)),
+        End::ServerGone => Ended::Lost,
+    })
+}
+
+/// The attachment itself, on a connection made: the terminal set up, the
+/// hello sent (`remote` when `desktop` is given), bytes moved until one side
+/// ends, the terminal put back.
+fn attach_with(
+    stream: UnixStream,
+    session: Option<String>,
+    desktop: Option<Arc<dyn Desktop>>,
+) -> Result<End> {
     // Caught before the size is read and the terminal made raw, so a resize
     // in between is still sent and a signal still puts the terminal back.
     let (signals, signal_pipe) =
@@ -184,30 +246,28 @@ pub fn attach(session: Option<String>) -> Result<ExitCode> {
         cwd: std::env::current_dir()
             .ok()
             .map(|d| d.to_string_lossy().into_owned()),
+        remote: desktop.is_some(),
     };
-    let end = run(stream, libc::STDIN_FILENO, hello, signal_pipe, size, || {
-        measure(libc::STDOUT_FILENO)
-    });
+    let end = run(
+        stream,
+        libc::STDIN_FILENO,
+        hello,
+        signal_pipe,
+        size,
+        || measure(libc::STDOUT_FILENO),
+        desktop,
+    );
     drop(terminal);
     drop(signals);
-    match end {
-        End::Exit(message) => {
-            if let Some(message) = message {
-                println!("{message}");
-            }
-            Ok(ExitCode::SUCCESS)
-        }
-        End::StdinClosed | End::TerminalGone => Ok(ExitCode::SUCCESS),
-        End::ServerGone => bail!("the server went away"),
-        End::Signal(sig) => Ok(ExitCode::from(128 + sig.clamp(0, 127) as u8)),
-    }
+    Ok(end)
 }
 
 /// Moves bytes between the terminal and the server until one side ends:
 /// sends `hello`, then reads `input` (a terminal descriptor, duplicated so
 /// its thread owns what it reads from), writes the server's output to the
-/// attached terminal, and sends a resize for each SIGWINCH read from
-/// `signals` when `measure` gives a size other than the last one sent.
+/// attached terminal, sends a resize for each SIGWINCH read from `signals`
+/// when `measure` gives a size other than the last one sent, and hands
+/// `desktop` what the server asks of this computer.
 fn run(
     stream: UnixStream,
     input: RawFd,
@@ -215,6 +275,7 @@ fn run(
     signals: File,
     size: Size,
     measure: impl Fn() -> Size + Send + 'static,
+    desktop: Option<Arc<dyn Desktop>>,
 ) -> End {
     let (Ok(writer), Ok(reader)) = (stream.try_clone(), stream.try_clone()) else {
         return End::ServerGone;
@@ -229,14 +290,37 @@ fn run(
         return End::StdinClosed;
     };
     let (tx, rx) = mpsc::channel();
+    // Closed as the attachment ends, which ends the input thread's wait on
+    // the terminal, so a key typed after it (into the next attachment,
+    // `switchboard ssh` reconnecting) isn't read by it.
+    let Ok((stop_read, stop)) = io::pipe() else {
+        return End::StdinClosed;
+    };
 
     let (to_server, done) = (Arc::clone(&writer), tx.clone());
     std::thread::spawn(move || {
-        let _ = done.send(pump_input(FdReader(input), &to_server));
+        let reader = FdReader {
+            fd: input,
+            stop: Some(OwnedFd::from(stop_read)),
+        };
+        let _ = done.send(pump_input(reader, &to_server));
     });
-    let done = tx.clone();
+    let (done, answers) = (tx.clone(), Arc::clone(&writer));
     std::thread::spawn(move || {
-        let _ = done.send(pump_output(reader, write_screen));
+        let desk = |ask: Desk| {
+            let Some(desktop) = desktop.clone() else {
+                return;
+            };
+            let answers = Arc::clone(&answers);
+            // A link opening or a port forwarded takes a moment; the screen
+            // goes on meanwhile.
+            std::thread::spawn(move || {
+                if let Some(answer) = desktop.act(ask) {
+                    let _ = send(&answers, &answer);
+                }
+            });
+        };
+        let _ = done.send(pump_output(reader, write_screen, desk));
     });
     let (to_server, done) = (Arc::clone(&writer), tx);
     std::thread::spawn(move || {
@@ -251,9 +335,9 @@ fn run(
     if end.detaches() {
         let _ = send(&writer, &ClientMsg::Detach);
     }
-    // Ends the output thread; the input thread is left reading the
-    // terminal, and goes with the process.
+    // Ends the output thread, and the input thread's wait on the terminal.
     let _ = stream.shutdown(Shutdown::Both);
+    drop(stop);
     end
 }
 
@@ -282,8 +366,12 @@ fn pump_input<R: Read, W: Write>(mut input: R, sock: &Mutex<W>) -> End {
 }
 
 /// Reads the server's messages and writes its output with `write`, until it
-/// says to end or goes away.
-fn pump_output<R: Read>(mut sock: R, mut write: impl FnMut(&[u8]) -> io::Result<()>) -> End {
+/// says to end or goes away, handing what it asks of this computer to `desk`.
+fn pump_output<R: Read>(
+    mut sock: R,
+    mut write: impl FnMut(&[u8]) -> io::Result<()>,
+    mut desk: impl FnMut(Desk),
+) -> End {
     loop {
         match proto::read_server(&mut sock) {
             Ok(Some(ServerMsg::Output(bytes))) => {
@@ -291,6 +379,7 @@ fn pump_output<R: Read>(mut sock: R, mut write: impl FnMut(&[u8]) -> io::Result<
                     return End::TerminalGone;
                 }
             }
+            Ok(Some(ServerMsg::Desk(ask))) => desk(ask),
             Ok(Some(ServerMsg::Exit { message })) => return End::Exit(message),
             // A command's reply means nothing to an attached terminal.
             Ok(Some(ServerMsg::Reply { .. })) => {}
@@ -541,23 +630,64 @@ fn wait_for(fd: RawFd, events: libc::c_short) {
 }
 
 /// A terminal read straight from its descriptor, a read giving what one
-/// `read` gives, so each keypress is sent as soon as it arrives.
-struct FdReader(OwnedFd);
+/// `read` gives, so each keypress is sent as soon as it arrives. With a
+/// `stop` pipe, it waits on both, and reads as ended (0) once the pipe's
+/// other end closes, without reading the terminal.
+struct FdReader {
+    fd: OwnedFd,
+    stop: Option<OwnedFd>,
+}
+
+impl FdReader {
+    /// Waits until the terminal can be read; false once `stop` has closed.
+    fn ready(&self) -> bool {
+        let Some(stop) = &self.stop else {
+            return true;
+        };
+        let mut fds = [
+            libc::pollfd {
+                fd: self.fd.as_raw_fd(),
+                events: libc::POLLIN,
+                revents: 0,
+            },
+            libc::pollfd {
+                fd: stop.as_raw_fd(),
+                events: libc::POLLIN,
+                revents: 0,
+            },
+        ];
+        loop {
+            // SAFETY: polls the two pollfds given.
+            let n = unsafe { libc::poll(fds.as_mut_ptr(), 2, -1) };
+            if n < 0 && io::Error::last_os_error().kind() == io::ErrorKind::Interrupted {
+                continue;
+            }
+            return fds[1].revents == 0;
+        }
+    }
+}
 
 impl Read for FdReader {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         loop {
+            if !self.ready() {
+                return Ok(0);
+            }
             // SAFETY: reads into a slice that outlives the call.
-            let n = unsafe { libc::read(self.0.as_raw_fd(), buf.as_mut_ptr().cast(), buf.len()) };
+            let n = unsafe { libc::read(self.fd.as_raw_fd(), buf.as_mut_ptr().cast(), buf.len()) };
             if n >= 0 {
                 return Ok(n as usize);
             }
             let e = io::Error::last_os_error();
-            if e.kind() == io::ErrorKind::WouldBlock {
-                wait_for(self.0.as_raw_fd(), libc::POLLIN);
-                continue;
+            match e.kind() {
+                io::ErrorKind::WouldBlock => {
+                    if self.stop.is_none() {
+                        wait_for(self.fd.as_raw_fd(), libc::POLLIN);
+                    }
+                }
+                io::ErrorKind::Interrupted => {}
+                _ => return Err(e),
             }
-            return Err(e);
         }
     }
 }
@@ -877,32 +1007,48 @@ mod tests {
             stdout: Vec::new(),
             stderr: Vec::new(),
         }));
+        stream.extend(proto::encode_server(&ServerMsg::Desk(Desk::Copy {
+            text: "copied".into(),
+        })));
         stream.extend(proto::encode_server(&ServerMsg::Output(b"two".to_vec())));
         stream.extend(proto::encode_server(&ServerMsg::Exit {
             message: Some("[detached]".into()),
         }));
         stream.extend(proto::encode_server(&ServerMsg::Output(b"never".to_vec())));
         let mut written = Vec::new();
-        let end = pump_output(Cursor::new(stream), |b| {
-            written.push(b.to_vec());
-            Ok(())
-        });
+        let mut asked = Vec::new();
+        let end = pump_output(
+            Cursor::new(stream),
+            |b| {
+                written.push(b.to_vec());
+                Ok(())
+            },
+            |ask| asked.push(ask),
+        );
         assert_eq!(end, End::Exit(Some("[detached]".into())));
         assert_eq!(written, vec![b"one".to_vec(), b"two".to_vec()]);
+        assert_eq!(
+            asked,
+            vec![Desk::Copy {
+                text: "copied".into()
+            }]
+        );
     }
 
     #[test]
     fn output_ends_when_the_server_goes_or_the_terminal_does() {
         let stream = proto::encode_server(&ServerMsg::Output(b"x".to_vec()));
-        let end = pump_output(Cursor::new(stream.clone()), |_| Ok(()));
+        let end = pump_output(Cursor::new(stream.clone()), |_| Ok(()), |_| {});
         assert_eq!(end, End::ServerGone);
 
-        let end = pump_output(Cursor::new(stream[..3].to_vec()), |_| Ok(()));
+        let end = pump_output(Cursor::new(stream[..3].to_vec()), |_| Ok(()), |_| {});
         assert_eq!(end, End::ServerGone, "a frame cut short");
 
-        let end = pump_output(Cursor::new(stream), |_| {
-            Err(io::Error::from(io::ErrorKind::BrokenPipe))
-        });
+        let end = pump_output(
+            Cursor::new(stream),
+            |_| Err(io::Error::from(io::ErrorKind::BrokenPipe)),
+            |_| {},
+        );
         assert_eq!(end, End::TerminalGone);
     }
 
@@ -1101,6 +1247,7 @@ mod tests {
             xpixel: 0,
             ypixel: 0,
             cwd: None,
+            remote: false,
         }
     }
 
@@ -1125,6 +1272,7 @@ mod tests {
                 File::from(signal_read),
                 Size::cells(80, 24),
                 move || *measured.lock().unwrap(),
+                None,
             )
         });
 
@@ -1182,6 +1330,7 @@ mod tests {
                 File::from(signal_read),
                 Size::cells(80, 24),
                 || Size::cells(80, 24),
+                None,
             )
         });
         assert_eq!(server.next(), Some(hello()));
@@ -1210,12 +1359,47 @@ mod tests {
                 File::from(signal_read),
                 Size::cells(80, 24),
                 || Size::cells(80, 24),
+                None,
             )
         });
         assert_eq!(server.next(), Some(hello()));
         drop(server);
         assert_eq!(running.join().unwrap(), End::ServerGone);
         drop(terminal);
+    }
+
+    #[test]
+    fn the_terminals_reader_ends_once_told_to_without_reading_it() {
+        let pty = Pty::open();
+        let fd = pty.slave.try_clone().unwrap();
+        let (stop_read, stop) = io::pipe().unwrap();
+        let reading = std::thread::spawn(move || {
+            let mut reader = FdReader {
+                fd,
+                stop: Some(OwnedFd::from(stop_read)),
+            };
+            let mut buf = [0u8; 16];
+            let first = reader.read(&mut buf).unwrap();
+            let got = buf[..first].to_vec();
+            let second = reader.read(&mut buf).unwrap();
+            (got, second)
+        });
+        // A new pty is cooked: a read gives a line.
+        pty.type_in(b"a\n");
+        std::thread::sleep(Duration::from_millis(100));
+        drop(stop);
+        let (got, second) = reading.join().unwrap();
+        assert_eq!(got, b"a\n");
+        assert_eq!(second, 0, "ended, not waiting on the terminal");
+        // What is typed after is still there for the next reader.
+        pty.type_in(b"b\n");
+        let mut next = FdReader {
+            fd: pty.slave.try_clone().unwrap(),
+            stop: None,
+        };
+        let mut buf = [0u8; 16];
+        let n = next.read(&mut buf).unwrap();
+        assert_eq!(&buf[..n], b"b\n");
     }
 
     #[test]

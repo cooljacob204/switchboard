@@ -202,6 +202,10 @@ pub struct HandedClient {
     /// Bytes of frames not yet written.
     #[serde(default)]
     pub output: Vec<u8>,
+    /// Attached through `switchboard ssh` (src/remote); false from a build
+    /// before it was kept.
+    #[serde(default)]
+    pub remote: bool,
 }
 
 /// Writes the handover, readable only by you, in place of any left before.
@@ -872,6 +876,7 @@ pub(super) async fn hand_over(server: &mut Server, lp: &mut Loop<'_>) {
                     // What its parser held came before the frame half read.
                     input: [server.held_keys(*id), held.input.clone()].concat(),
                     output: held.output.clone(),
+                    remote: c.remote,
                 })
             })
             .collect(),
@@ -1062,6 +1067,7 @@ pub fn adopt(server: &mut Server, handover: Handover) {
             c.cols,
             c.rows,
             c.term,
+            c.remote,
             Duration::from_millis(c.idle_ms),
             c.input,
             c.output,
@@ -1231,6 +1237,7 @@ mod tests {
                 idle_ms: 1500,
                 input: vec![1, 0, 0],
                 output: b"\x1b[H".to_vec(),
+                remote: true,
             }],
             next_pane: 9,
             next_tab: 4,

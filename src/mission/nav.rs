@@ -133,6 +133,7 @@ fn fact(m: &Mission, place: usize, short: bool) -> Option<(String, Tone)> {
         ViewId::Calendar
         | ViewId::Relay
         | ViewId::Resources
+        | ViewId::Ports
         | ViewId::Usage
         | ViewId::Keys
         | ViewId::Settings

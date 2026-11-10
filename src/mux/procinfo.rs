@@ -1,5 +1,6 @@
 //! A process's working directory, command name and process group's members,
-//! and every process's CPU time and memory, read from `/proc` on Linux and
+//! every process's CPU time and memory, and the TCP ports a process listens
+//! on, read from `/proc` on Linux and
 //! from the kernel's process info (libc's `proc_pidinfo`, `proc_listpids`,
 //! `sysctl`) on macOS, without starting a process: the server asks for every pane on every focus change, and the
 //! tmux version's `ps` and `lsof` calls there were what made it sluggish
@@ -11,6 +12,8 @@
 //! we may not look at, gives `None` or nothing, never an error: the caller
 //! falls back to the pane's own program.
 
+use std::collections::HashMap;
+use std::net::IpAddr;
 use std::path::PathBuf;
 
 /// The process's working directory.
@@ -177,6 +180,129 @@ fn parse_meminfo(info: &str) -> Option<(u64, u64)> {
     Some((total.saturating_sub(available), total))
 }
 
+/// Every process we may look at, with its parent: what finding everything
+/// under a pane needs (src/remote/ports.rs), lighter than `all_usage`.
+pub fn parents() -> Vec<(u32, u32)> {
+    let mut list = imp::parents();
+    list.sort_unstable();
+    list
+}
+
+/// A TCP socket listening for connections: the address it listens on (the
+/// unspecified one for every address) and its port.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Listener {
+    pub addr: IpAddr,
+    pub port: u16,
+}
+
+/// The TCP sockets each of `pids` listens on, for the ports a remote
+/// workspace's panes serve (src/remote): on Linux the LISTEN rows of
+/// `/proc/net/tcp` and `/proc/net/tcp6`, matched by their sockets' inodes
+/// to the processes' descriptors in `/proc/<pid>/fd`; on macOS each socket
+/// descriptor's info from the kernel (`proc_pidfdinfo`). A pid that listens
+/// on nothing, or that we may not look at, is left out. A few hundred small
+/// reads, so it runs off the server's task.
+pub fn listening(pids: &[u32]) -> HashMap<u32, Vec<Listener>> {
+    let pids: Vec<u32> = pids.iter().copied().filter(|&p| p > 0).collect();
+    let mut found = imp::listening(&pids);
+    for list in found.values_mut() {
+        list.sort_unstable();
+        list.dedup();
+    }
+    found.retain(|_, list| !list.is_empty());
+    found
+}
+
+/// The listening sockets in `/proc/net/tcp` (or `tcp6`, with `v6`), by
+/// their inodes: the rows whose state is `0A`, LISTEN. Each address is
+/// printed as the 32-bit words the kernel holds, in the computer's own byte
+/// order, and each port in hex.
+#[cfg(any(test, target_os = "linux"))]
+fn parse_net_tcp(text: &str, v6: bool) -> Vec<(u64, Listener)> {
+    text.lines()
+        .skip(1)
+        .filter_map(|line| {
+            let fields: Vec<&str> = line.split_whitespace().collect();
+            if fields.get(3) != Some(&"0A") {
+                return None;
+            }
+            let (addr, port) = fields.get(1)?.split_once(':')?;
+            let port = u16::from_str_radix(port, 16).ok()?;
+            let words: Vec<u32> = (0..addr.len() / 8)
+                .map(|i| u32::from_str_radix(addr.get(i * 8..i * 8 + 8)?, 16).ok())
+                .collect::<Option<_>>()?;
+            let bytes: Vec<u8> = words.iter().flat_map(|w| w.to_ne_bytes()).collect();
+            let addr = match (v6, bytes.len()) {
+                (false, 4) => IpAddr::from(<[u8; 4]>::try_from(bytes).ok()?),
+                (true, 16) => IpAddr::from(<[u8; 16]>::try_from(bytes).ok()?),
+                _ => return None,
+            };
+            let inode = fields.get(9)?.parse().ok()?;
+            Some((inode, Listener { addr, port }))
+        })
+        .collect()
+}
+
+/// The inode of a socket from what its descriptor's link in `/proc/<pid>/fd`
+/// reads: `socket:[12345]`.
+#[cfg(any(test, target_os = "linux"))]
+fn socket_inode(link: &str) -> Option<u64> {
+    link.strip_prefix("socket:[")?
+        .strip_suffix(']')?
+        .parse()
+        .ok()
+}
+
+/// Where `struct socket_fdinfo` (macOS's `sys/proc_info.h`, which the
+/// libc crate doesn't carry) keeps what is read of a TCP socket: its
+/// `proc_fileinfo` (24 bytes) then its `socket_info`, whose `soi_kind` is
+/// at 232 and protocol union at 240; in the union's `tcp_sockinfo`, the
+/// `in_sockinfo` first (its local port at 4, its IP version flags at 24,
+/// its local address at 48), then the TCP state at 80.
+#[cfg(any(test, target_os = "macos"))]
+mod socket_fdinfo {
+    /// `sizeof(struct socket_fdinfo)`.
+    pub const SIZE: usize = 792;
+    pub const KIND: usize = 24 + 232;
+    const PROTO: usize = 24 + 240;
+    pub const LOCAL_PORT: usize = PROTO + 4;
+    pub const VERSION: usize = PROTO + 24;
+    pub const LOCAL_ADDR: usize = PROTO + 48;
+    pub const TCP_STATE: usize = PROTO + 80;
+    /// `SOCKINFO_TCP`, `TSI_S_LISTEN`, `INI_IPV6`.
+    pub const KIND_TCP: i32 = 2;
+    pub const LISTEN: i32 = 1;
+    pub const IPV6: u8 = 0x2;
+}
+
+/// A listening TCP socket from what `proc_pidfdinfo(PROC_PIDFDSOCKETINFO)`
+/// filled; `None` for any other socket. The port is kept in network byte
+/// order in the low half of an int, as lsof reads it.
+#[cfg(any(test, target_os = "macos"))]
+fn parse_socket_fdinfo(buf: &[u8]) -> Option<Listener> {
+    use socket_fdinfo as f;
+    if buf.len() < f::SIZE {
+        return None;
+    }
+    let int = |at: usize| i32::from_ne_bytes(buf[at..at + 4].try_into().expect("four bytes"));
+    if int(f::KIND) != f::KIND_TCP || int(f::TCP_STATE) != f::LISTEN {
+        return None;
+    }
+    let port = u16::from_be(int(f::LOCAL_PORT) as u16);
+    let addr = if buf[f::VERSION] & f::IPV6 != 0 {
+        let bytes: [u8; 16] = buf[f::LOCAL_ADDR..f::LOCAL_ADDR + 16].try_into().ok()?;
+        IpAddr::from(bytes)
+    } else {
+        // An IPv4 address is the last four bytes of its `in4in6_addr`.
+        let bytes: [u8; 4] = buf[f::LOCAL_ADDR + 12..f::LOCAL_ADDR + 16]
+            .try_into()
+            .ok()?;
+        IpAddr::from(bytes)
+    };
+    Some(Listener { addr, port })
+}
+
 /// What `/proc/<pid>/stat` says of a process for the Resources view: its
 /// name (between the first `(` and the last `)`), parent, and user and
 /// system time in clock ticks (fields 14 and 15, counting from one).
@@ -275,6 +401,7 @@ fn parse_procargs2(buf: &[u8]) -> Option<Vec<String>> {
 
 #[cfg(target_os = "linux")]
 mod imp {
+    use std::collections::HashMap;
     use std::fs;
     use std::path::PathBuf;
 
@@ -385,6 +512,34 @@ mod imp {
         })
     }
 
+    pub fn parents() -> Vec<(u32, u32)> {
+        processes().map(|(pid, ppid, _)| (pid, ppid)).collect()
+    }
+
+    pub fn listening(pids: &[u32]) -> HashMap<u32, Vec<super::Listener>> {
+        let mut sockets: HashMap<u64, super::Listener> = HashMap::new();
+        for (file, v6) in [("/proc/net/tcp", false), ("/proc/net/tcp6", true)] {
+            if let Ok(text) = fs::read_to_string(file) {
+                sockets.extend(super::parse_net_tcp(&text, v6));
+            }
+        }
+        if sockets.is_empty() {
+            return HashMap::new();
+        }
+        pids.iter()
+            .filter_map(|&pid| {
+                let found: Vec<super::Listener> = fs::read_dir(format!("/proc/{pid}/fd"))
+                    .ok()?
+                    .flatten()
+                    .filter_map(|entry| fs::read_link(entry.path()).ok())
+                    .filter_map(|link| super::socket_inode(&link.to_string_lossy()))
+                    .filter_map(|inode| sockets.get(&inode).copied())
+                    .collect();
+                Some((pid, found))
+            })
+            .collect()
+    }
+
     fn pids() -> impl Iterator<Item = u32> {
         fs::read_dir("/proc")
             .into_iter()
@@ -408,6 +563,7 @@ mod imp {
 
 #[cfg(target_os = "macos")]
 mod imp {
+    use std::collections::HashMap;
     use std::ffi::{CStr, OsStr, c_int, c_void};
     use std::mem::{size_of, size_of_val};
     use std::os::unix::ffi::OsStrExt;
@@ -687,6 +843,79 @@ mod imp {
         })
     }
 
+    pub fn parents() -> Vec<(u32, u32)> {
+        all_pids()
+            .into_iter()
+            .filter_map(|pid| Some((pid, bsd_info(pid)?.pbi_ppid)))
+            .collect()
+    }
+
+    /// `proc_pidfdinfo`'s flavor for a socket's info, from `sys/proc_info.h`.
+    const PROC_PIDFDSOCKETINFO: c_int = 3;
+
+    pub fn listening(pids: &[u32]) -> HashMap<u32, Vec<super::Listener>> {
+        pids.iter().map(|&pid| (pid, listening_of(pid))).collect()
+    }
+
+    /// The listening TCP sockets among a process's descriptors: its
+    /// descriptors listed (asked once for the room needed, then filled),
+    /// each socket's info read.
+    fn listening_of(pid: u32) -> Vec<super::Listener> {
+        let Some(pid) = c_pid(pid) else {
+            return Vec::new();
+        };
+        // SAFETY: a null buffer asks only for the size.
+        let need = unsafe { libc::proc_pidinfo(pid, libc::PROC_PIDLISTFDS, 0, ptr::null_mut(), 0) };
+        if need <= 0 {
+            return Vec::new();
+        }
+        let one = size_of::<libc::proc_fdinfo>();
+        let room = need as usize / one + 16;
+        // SAFETY: a plain C struct, for which all zeroes is a valid value.
+        let mut fds: Vec<libc::proc_fdinfo> = vec![unsafe { std::mem::zeroed() }; room];
+        // SAFETY: the buffer holds `room` of the structs the flavor fills, of
+        // the size given in bytes.
+        let filled = unsafe {
+            libc::proc_pidinfo(
+                pid,
+                libc::PROC_PIDLISTFDS,
+                0,
+                fds.as_mut_ptr().cast::<c_void>(),
+                (room * one) as c_int,
+            )
+        };
+        if filled <= 0 {
+            return Vec::new();
+        }
+        fds.truncate((filled as usize / one).min(room));
+        fds.iter()
+            .filter(|fd| fd.proc_fdtype == libc::PROX_FDTYPE_SOCKET as u32)
+            .filter_map(|fd| {
+                // Room past the struct's size, aligned for its 64-bit fields.
+                let mut buf = [0u64; 128];
+                // SAFETY: the buffer is larger than the struct the flavor
+                // fills, and its size is given.
+                let got = unsafe {
+                    libc::proc_pidfdinfo(
+                        pid,
+                        fd.proc_fd,
+                        PROC_PIDFDSOCKETINFO,
+                        buf.as_mut_ptr().cast::<c_void>(),
+                        size_of_val(&buf) as c_int,
+                    )
+                };
+                if got <= 0 {
+                    return None;
+                }
+                // SAFETY: u64s seen as the bytes they are made of.
+                let bytes = unsafe {
+                    std::slice::from_raw_parts(buf.as_ptr().cast::<u8>(), size_of_val(&buf))
+                };
+                super::parse_socket_fdinfo(&bytes[..(got as usize).min(bytes.len())])
+            })
+            .collect()
+    }
+
     /// Every pid: asked once with no buffer for how many, then filled, with
     /// room for a few more started between the two calls.
     fn all_pids() -> Vec<u32> {
@@ -777,11 +1006,160 @@ mod imp {
     pub fn system() -> Option<super::System> {
         None
     }
+    pub fn parents() -> Vec<(u32, u32)> {
+        Vec::new()
+    }
+    pub fn listening(_pids: &[u32]) -> std::collections::HashMap<u32, Vec<super::Listener>> {
+        std::collections::HashMap::new()
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The addresses as this computer's kernel prints them: each 32-bit word
+    /// in its own byte order, as `/proc/net/tcp` writes it.
+    fn word(bytes: [u8; 4]) -> String {
+        format!("{:08X}", u32::from_ne_bytes(bytes))
+    }
+
+    #[test]
+    fn listening_sockets_are_read_from_proc_net_tcp() {
+        let v4 = format!(
+            "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n\
+             \x20  0: {}:1F90 00000000:0000 0A 00000000:00000000 00:00000000 00000000  1000        0 4242 1 0000000000000000 100 0 0 10 0\n\
+             \x20  1: {}:0016 00000000:0000 0A 00000000:00000000 00:00000000 00000000     0        0 17 1 0000000000000000 100 0 0 10 0\n\
+             \x20  2: {}:9C40 {}:01BB 01 00000000:00000000 00:00000000 00000000  1000        0 99 1 0000000000000000 20 4 30 10 -1\n",
+            word([127, 0, 0, 1]),
+            word([0, 0, 0, 0]),
+            word([10, 0, 0, 5]),
+            word([93, 184, 216, 34]),
+        );
+        let found = parse_net_tcp(&v4, false);
+        assert_eq!(
+            found,
+            vec![
+                (
+                    4242,
+                    Listener {
+                        addr: "127.0.0.1".parse().unwrap(),
+                        port: 8080
+                    }
+                ),
+                (
+                    17,
+                    Listener {
+                        addr: "0.0.0.0".parse().unwrap(),
+                        port: 22
+                    }
+                ),
+            ],
+            "an established connection is no listener"
+        );
+        let loopback6 = [
+            word([0, 0, 0, 0]),
+            word([0, 0, 0, 0]),
+            word([0, 0, 0, 0]),
+            word([0, 0, 0, 1]),
+        ]
+        .concat();
+        let v6 = format!(
+            "  sl  local_address                         remote_address                        st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n\
+             \x20  0: {loopback6}:1538 00000000000000000000000000000000:0000 0A 00000000:00000000 00:00000000 00000000  1000        0 555 1 0000000000000000 100 0 0 10 0\n"
+        );
+        assert_eq!(
+            parse_net_tcp(&v6, true),
+            vec![(
+                555,
+                Listener {
+                    addr: "::1".parse().unwrap(),
+                    port: 5432
+                }
+            )]
+        );
+        assert!(parse_net_tcp("header only\n", false).is_empty());
+        assert!(parse_net_tcp("h\n  0: nonsense 0A\n", false).is_empty());
+    }
+
+    #[test]
+    fn a_descriptor_names_its_socket_by_inode() {
+        assert_eq!(socket_inode("socket:[12345]"), Some(12345));
+        assert_eq!(socket_inode("pipe:[12345]"), None);
+        assert_eq!(socket_inode("/dev/pts/3"), None);
+        assert_eq!(socket_inode("socket:[x]"), None);
+    }
+
+    /// A `socket_fdinfo` as macOS fills it for a TCP socket.
+    fn socket_info(state: i32, v6: bool, addr: &[u8], port: u16) -> Vec<u8> {
+        use socket_fdinfo as f;
+        let mut buf = vec![0u8; f::SIZE];
+        buf[f::KIND..f::KIND + 4].copy_from_slice(&f::KIND_TCP.to_ne_bytes());
+        buf[f::TCP_STATE..f::TCP_STATE + 4].copy_from_slice(&state.to_ne_bytes());
+        // The port in network order, in the low half of a native int.
+        let lport = i32::from(u16::from_ne_bytes(port.to_be_bytes()));
+        buf[f::LOCAL_PORT..f::LOCAL_PORT + 4].copy_from_slice(&lport.to_ne_bytes());
+        buf[f::VERSION] = if v6 { f::IPV6 } else { 0x1 };
+        let at = if v6 {
+            f::LOCAL_ADDR
+        } else {
+            f::LOCAL_ADDR + 12
+        };
+        buf[at..at + addr.len()].copy_from_slice(addr);
+        buf
+    }
+
+    #[test]
+    fn a_listening_socket_is_read_from_macos_socket_info() {
+        assert_eq!(
+            parse_socket_fdinfo(&socket_info(1, false, &[127, 0, 0, 1], 3000)),
+            Some(Listener {
+                addr: "127.0.0.1".parse().unwrap(),
+                port: 3000
+            })
+        );
+        let mut any6 = [0u8; 16];
+        any6[15] = 0;
+        assert_eq!(
+            parse_socket_fdinfo(&socket_info(1, true, &any6, 5173)),
+            Some(Listener {
+                addr: "::".parse().unwrap(),
+                port: 5173
+            })
+        );
+        // Established, not listening.
+        assert_eq!(
+            parse_socket_fdinfo(&socket_info(4, false, &[127, 0, 0, 1], 3000)),
+            None
+        );
+        // Cut short.
+        assert_eq!(
+            parse_socket_fdinfo(&socket_info(1, false, &[127, 0, 0, 1], 3000)[..400]),
+            None
+        );
+        // Another kind of socket.
+        let mut udp = socket_info(1, false, &[127, 0, 0, 1], 3000);
+        udp[socket_fdinfo::KIND] = 1;
+        assert_eq!(parse_socket_fdinfo(&udp), None);
+    }
+
+    #[test]
+    fn this_process_is_seen_listening_on_its_port() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let me = std::process::id();
+        let found = listening(&[me]);
+        let mine = found.get(&me).cloned().unwrap_or_default();
+        assert!(
+            mine.contains(&Listener {
+                addr: "127.0.0.1".parse().unwrap(),
+                port
+            }),
+            "{port} among {mine:?}"
+        );
+        drop(listener);
+        assert!(parents().iter().any(|&(pid, _)| pid == me));
+    }
 
     #[test]
     fn the_whole_computer_reads_its_memory_and_cpu() {

@@ -8,7 +8,8 @@
 //! Reopen, the PR board, CI, Landing (while something lands), Autopilot
 //! (with UX 2.0, while it is on, src/autopilot/view.rs), Routines (while
 //! `routines` is on, src/routines/view.rs), the ticket
-//! board, the Inbox, Resources, Usage, Keys (`keymap`), Settings,
+//! board, the Inbox, Resources, Ports (a remote workspace's,
+//! src/remote/serve.rs), Usage, Keys (`keymap`), Settings,
 //! then each plugin's. With UX 2.0 the bar shows them by feature in groups
 //! (`groups`): Work, Code, Day and System.
 //!
@@ -66,6 +67,8 @@ pub enum ViewId {
     Tickets,
     Inbox,
     Resources,
+    /// The ports a remote workspace's panes listen on (src/remote).
+    Ports,
     Usage,
     Keys,
     Settings,
@@ -122,6 +125,7 @@ impl View {
             ViewId::Tickets => "tickets",
             ViewId::Inbox => "inbox",
             ViewId::Resources => "resources",
+            ViewId::Ports => "ports",
             ViewId::Usage => "usage",
             ViewId::Keys => "keys",
             ViewId::Settings => "settings",
@@ -192,7 +196,7 @@ pub fn slug_title(slug: &str) -> String {
 /// Work map is M-j's picker alone, so it is in none.
 impl ViewId {
     /// Every view but the plugins', in mission control's order.
-    pub const BUILT_IN: [ViewId; 17] = [
+    pub const BUILT_IN: [ViewId; 18] = [
         ViewId::Notifications,
         ViewId::Calendar,
         ViewId::Reminders,
@@ -207,6 +211,7 @@ impl ViewId {
         ViewId::Tickets,
         ViewId::Inbox,
         ViewId::Resources,
+        ViewId::Ports,
         ViewId::Usage,
         ViewId::Keys,
         ViewId::Settings,
@@ -231,6 +236,7 @@ impl ViewId {
             ViewId::Tickets => "Tickets",
             ViewId::Inbox => "Inbox",
             ViewId::Resources => "Resources",
+            ViewId::Ports => "Ports",
             ViewId::Usage => "Usage",
             ViewId::Keys => "Keys",
             ViewId::Settings => "Settings",
@@ -285,6 +291,7 @@ impl ViewId {
             ViewId::Tickets => "your Linear issues by state",
             ViewId::Inbox => "your unread Linear mentions, comments and assignments",
             ViewId::Resources => "the CPU and memory each tab uses",
+            ViewId::Ports => "the ports a remote workspace's panes listen on",
             ViewId::Usage => "today's Claude spend and the rate limits",
             ViewId::Keys => "every key, by what it is about",
             ViewId::Settings => "turn the workspace's options on and off",
@@ -341,6 +348,9 @@ impl ViewId {
             ViewId::Resources => {
                 "Every process under a tab's panes counted, the heaviest tab first, read every three seconds only while the view is in front. Enter goes to the tab. Settings' \"Resources\" (view_resources)."
             }
+            ViewId::Ports => {
+                "In a workspace attached with switchboard ssh, each port its panes' programs listen on, with its tab and where it is on your computer. Enter's menu opens it in your browser, f forwards it or stops it. Settings' \"Ports\" (view_ports)."
+            }
             ViewId::Usage => {
                 "Spend at API prices as Claude Code estimates it, interactive sessions only, and when each limit resets; below, today's requests to services outside the computer, then each open Claude session's context, model and age, the fullest first. Settings' \"Usage\" (usage)."
             }
@@ -375,6 +385,7 @@ impl ViewId {
             ViewId::Tickets => &["mission", "linear", "ticket"],
             ViewId::Inbox => &["mission", "linear", "inbox"],
             ViewId::Resources => &["mission", "cpu", "memory", "processes"],
+            ViewId::Ports => &["mission", "remote", "ssh", "ports"],
             ViewId::Usage => &["mission", "claude", "usage", "cost"],
             ViewId::Keys => &["mission", "help", "keys"],
             ViewId::Settings => &["mission", "settings"],
@@ -423,9 +434,10 @@ fn place(id: &ViewId) -> (Group, u8) {
         ViewId::Notifications => (Group::Day, 5),
         ViewId::Usage => (Group::System, 0),
         ViewId::Resources => (Group::System, 1),
-        ViewId::Settings => (Group::System, 2),
-        ViewId::Keys => (Group::System, 3),
-        ViewId::Plugin(_) => (Group::System, 4),
+        ViewId::Ports => (Group::System, 2),
+        ViewId::Settings => (Group::System, 3),
+        ViewId::Keys => (Group::System, 4),
+        ViewId::Plugin(_) => (Group::System, 5),
     }
 }
 

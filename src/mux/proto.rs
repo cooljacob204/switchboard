@@ -57,6 +57,12 @@ pub enum ClientMsg {
         ypixel: u16,
         #[serde(default)]
         cwd: Option<String>,
+        /// Attached through `switchboard ssh` from another computer, which
+        /// opens the workspace's links, takes its clipboard and
+        /// notifications, and forwards its panes' ports (`Desk`, src/remote);
+        /// false from a client a version behind.
+        #[serde(default)]
+        remote: bool,
     },
     /// Bytes typed.
     Input(Vec<u8>),
@@ -87,6 +93,38 @@ pub enum ClientMsg {
         #[serde(default)]
         by_hand: bool,
     },
+    /// A remote client's answer to `Desk::Forward`: the port on its own
+    /// computer the pane's `port` is reached at, or why it isn't.
+    Forwarded {
+        port: u16,
+        local: Option<u16>,
+        error: Option<String>,
+    },
+}
+
+/// What the server asks of a client attached through `switchboard ssh`, to
+/// be done on the computer you're at rather than the one the workspace runs
+/// on (src/remote). Sent only to a client that said `remote` as it
+/// attached, which is the same version as the server (`switchboard ssh`
+/// installs it so), so a client that doesn't know these never gets one.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Desk {
+    /// A link opened in its browser, its profile chosen as for a link on
+    /// `as_site` when given (src/links.rs).
+    Open {
+        url: String,
+        as_site: Option<String>,
+    },
+    /// Text put on its clipboard.
+    Copy { text: String },
+    /// A desktop notification there.
+    Notify { title: String, text: String },
+    /// A pane's port forwarded to one on its computer, through its SSH
+    /// connection to `to` on the workspace's (`localhost`, or the address
+    /// the port listens on alone); answered with `ClientMsg::Forwarded`.
+    Forward { port: u16, to: String },
+    /// A port forwarded no longer.
+    Unforward { port: u16 },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -101,6 +139,8 @@ pub enum ServerMsg {
         stdout: Vec<u8>,
         stderr: Vec<u8>,
     },
+    /// Something to do on the remote client's computer.
+    Desk(Desk),
 }
 
 /// A frame's bytes for a client message.
@@ -327,6 +367,7 @@ mod tests {
                 xpixel: 3376,
                 ypixel: 2088,
                 cwd: Some("/home/jo/code".into()),
+                remote: true,
             },
             ClientMsg::Attach {
                 session: None,
@@ -336,6 +377,7 @@ mod tests {
                 xpixel: 0,
                 ypixel: 0,
                 cwd: None,
+                remote: false,
             },
             ClientMsg::Input(b"\x1b[A\x00\xffhi".to_vec()),
             ClientMsg::Input(Vec::new()),
@@ -360,6 +402,16 @@ mod tests {
                 stdin: None,
                 by_hand: false,
             },
+            ClientMsg::Forwarded {
+                port: 3000,
+                local: Some(3001),
+                error: None,
+            },
+            ClientMsg::Forwarded {
+                port: 80,
+                local: None,
+                error: Some("no free port".into()),
+            },
         ]
     }
 
@@ -381,6 +433,22 @@ mod tests {
                 stdout: Vec::new(),
                 stderr: b"\xff not utf-8".to_vec(),
             },
+            ServerMsg::Desk(Desk::Open {
+                url: "https://example.com/a?b#c".into(),
+                as_site: Some("awsapps.com".into()),
+            }),
+            ServerMsg::Desk(Desk::Copy {
+                text: "two\nlines é".into(),
+            }),
+            ServerMsg::Desk(Desk::Notify {
+                title: "Switchboard".into(),
+                text: "Tab 2 waits on you".into(),
+            }),
+            ServerMsg::Desk(Desk::Forward {
+                port: 5173,
+                to: "localhost".into(),
+            }),
+            ServerMsg::Desk(Desk::Unforward { port: 5173 }),
         ]
     }
 
@@ -597,6 +665,17 @@ mod tests {
             bytes.extend_from_slice(b"{}");
             let err = read_client(&mut Cursor::new(bytes)).unwrap_err();
             assert_eq!(err.kind(), io::ErrorKind::InvalidData, "tag {tag}");
+        }
+    }
+
+    #[test]
+    fn an_attach_from_a_client_a_version_behind_is_not_remote() {
+        let payload = br#"{"Attach":{"session":null,"cols":80,"rows":24,"term":"xterm"}}"#;
+        let mut bytes = header(TAG_JSON, payload.len() as u32);
+        bytes.extend_from_slice(payload);
+        match read_client(&mut Cursor::new(bytes)).unwrap() {
+            Some(ClientMsg::Attach { remote, .. }) => assert!(!remote),
+            other => panic!("expected an attach, got {other:?}"),
         }
     }
 

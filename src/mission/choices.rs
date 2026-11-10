@@ -234,6 +234,14 @@ pub enum Do {
         id: String,
         act: crate::routines::Act,
     },
+    /// A remote workspace's port forwarded to the computer you're at,
+    /// reached at `to` on the workspace's (src/remote).
+    ForwardPort {
+        port: u16,
+        to: String,
+    },
+    /// A port forwarded no longer, and not again until it closes.
+    StopPort(u16),
 }
 
 /// What a tab opened from a menu works on: what `wt`, `wtpr` and `shape`
@@ -1441,6 +1449,34 @@ pub fn item_choices(view: &ViewId, item: &Item, shown: &[Item], ctx: &Ctx<'_>) -
         }
         // A setting's are the server's, which reads the settings file.
         ViewId::Settings | ViewId::Relay => {}
+        // A port: opened in your browser once forwarded, forwarded or
+        // stopped, its tab.
+        ViewId::Ports => {
+            let port = item.data.get("port").and_then(Value::as_u64);
+            let port = port.and_then(|p| u16::try_from(p).ok());
+            if let Target::Url(u) = &item.target {
+                out.push(choice('o', "Open it in your browser", Do::Open(u.clone())));
+            }
+            if let Some(port) = port {
+                if item.data.get("forwarded").and_then(Value::as_bool) == Some(true) {
+                    out.push(choice('f', "Stop forwarding it", Do::StopPort(port)));
+                } else {
+                    let to = text(&item.data, "/to");
+                    let to = if to.is_empty() { "localhost" } else { to };
+                    out.push(choice(
+                        'f',
+                        "Forward it to your computer",
+                        Do::ForwardPort {
+                            port,
+                            to: to.to_string(),
+                        },
+                    ));
+                }
+            }
+            if let Target::Url(u) = &item.target {
+                out.push(choice('y', "Copy its link", Do::Copy(u.clone())));
+            }
+        }
         _ => out = target_choices(item, ctx),
     }
     out

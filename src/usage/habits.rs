@@ -284,6 +284,7 @@ pub const VIEWS: &[View] = &[
     service_view("Tickets", "ticket_board", "linear"),
     service_view("Inbox", "view_inbox", "linear"),
     view("Resources", "view_resources"),
+    view("Ports", "view_ports"),
     view("Usage", "usage"),
     view("Keys", "view_keys"),
 ];

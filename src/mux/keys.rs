@@ -181,6 +181,8 @@ pub enum Action {
     Autopilot(crate::autopilot::Command),
     /// Routines (src/routines).
     Routines(crate::routines::Command),
+    /// M-p's commands for a remote workspace's ports (src/remote).
+    Remote(crate::remote::Command),
 }
 
 impl Action {
@@ -240,6 +242,9 @@ impl Action {
         }
         if let Some(command) = crate::routines::Command::parse(name) {
             return Some(Action::Routines(command));
+        }
+        if let Some(command) = crate::remote::Command::parse(name) {
+            return Some(Action::Remote(command));
         }
         Some(match name {
             "prev-tab" => Action::PrevTab,
@@ -383,6 +388,7 @@ impl Action {
             Action::Extra(command) => command.name(),
             Action::Autopilot(command) => command.name().into(),
             Action::Routines(command) => command.name().into(),
+            Action::Remote(command) => command.name().into(),
         }
     }
 
@@ -491,6 +497,7 @@ impl Action {
             Action::Extra(command) => command.about(),
             Action::Autopilot(command) => command.about().into(),
             Action::Routines(command) => command.about().into(),
+            Action::Remote(command) => command.about().into(),
         }
     }
 
@@ -668,6 +675,7 @@ impl Action {
             Action::Extra(command) => command.detail().into(),
             Action::Autopilot(command) => command.detail().into(),
             Action::Routines(command) => command.detail().into(),
+            Action::Remote(command) => command.detail().into(),
         }
     }
 
@@ -745,6 +753,7 @@ impl Action {
             Action::Extra(command) => command.tags(),
             Action::Autopilot(command) => command.tags(),
             Action::Routines(command) => command.tags(),
+            Action::Remote(command) => command.tags(),
         }
     }
 
@@ -865,6 +874,7 @@ impl Action {
         .chain(crate::files::serve::Command::ALL.map(Action::Files))
         .chain(crate::autopilot::Command::ALL.map(Action::Autopilot))
         .chain(crate::routines::Command::ALL.map(Action::Routines))
+        .chain(crate::remote::Command::ALL.map(Action::Remote))
         .collect()
     }
 }
@@ -1158,6 +1168,8 @@ mod tests {
             )),
             Action::Autopilot(crate::autopilot::Command::WorkNote),
             Action::Routines(crate::routines::Command::New),
+            Action::Remote(crate::remote::Command::ForwardPort),
+            Action::Remote(crate::remote::Command::StopForwarding),
         ] {
             assert_eq!(Action::parse(&a.name()), Some(a));
         }

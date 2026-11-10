@@ -1755,6 +1755,11 @@ impl Server {
                 out.push(view(id, kind.title(), d, loaded));
             }
         }
+        // A remote workspace's ports, from what the server last read of
+        // them (src/remote).
+        if on("view_ports") {
+            out.push(view(ViewId::Ports, "Ports", self.ports_view(), true));
+        }
         // Every key, from the bindings the server holds (M-/).
         if on("view_keys") {
             let shown = super::keymap::Shown {
@@ -4749,6 +4754,14 @@ impl Server {
             Do::Copy(text) => {
                 self.to_clipboard(Some(client), &text);
                 self.mission_note(client, format!("Copied {text}"));
+            }
+            Do::ForwardPort { port, to } => match self.forward_port(port, &to, false) {
+                Ok(()) => self.mission_note(client, format!("Forwarding port {port}…")),
+                Err(why) => self.mission_note(client, why),
+            },
+            Do::StopPort(port) => {
+                self.stop_forwarding(port, true);
+                self.mission_note(client, format!("Stopped forwarding port {port}."));
             }
             Do::StartIn { dir, work } => {
                 self.mission_close(client);

@@ -14,7 +14,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
-use switchboard::mux::proto::{self, ClientMsg, ServerMsg};
+use switchboard::mux::proto::{self, ClientMsg, Desk, ServerMsg};
 use switchboard::ui::headless::Screen;
 
 pub mod http;
@@ -552,6 +552,9 @@ pub struct TestClient {
     pub exit: Option<Option<String>>,
     /// Every byte of output, for tests that look for an escape sequence.
     pub raw: Vec<u8>,
+    /// What the server asked of this client's computer, for one attached
+    /// as remote (`attach_remote`).
+    pub desk: Vec<Desk>,
 }
 
 impl TestClient {
@@ -579,6 +582,25 @@ impl TestClient {
         cwd: Option<&Path>,
         term: &str,
     ) -> TestClient {
+        TestClient::attach_as_remote(socket, session, cols, rows, cwd, term, false)
+    }
+
+    /// A terminal attaching from another computer, as `switchboard ssh`
+    /// attaches: the server asks it to open links, copy, notify and forward
+    /// ports (`desk`).
+    pub fn attach_remote(socket: &Path, cols: u16, rows: u16) -> TestClient {
+        TestClient::attach_as_remote(socket, None, cols, rows, None, "xterm-256color", true)
+    }
+
+    fn attach_as_remote(
+        socket: &Path,
+        session: Option<&str>,
+        cols: u16,
+        rows: u16,
+        cwd: Option<&Path>,
+        term: &str,
+        remote: bool,
+    ) -> TestClient {
         let mut stream = UnixStream::connect(socket).expect("the server answers");
         stream
             .write_all(&proto::encode_client(&ClientMsg::Attach {
@@ -589,6 +611,7 @@ impl TestClient {
                 xpixel: 0,
                 ypixel: 0,
                 cwd: cwd.map(|d| d.to_string_lossy().into_owned()),
+                remote,
             }))
             .unwrap();
         let mut reader = stream.try_clone().unwrap();
@@ -607,6 +630,7 @@ impl TestClient {
             term,
             exit: None,
             raw: Vec::new(),
+            desk: Vec::new(),
         }
     }
 
@@ -642,6 +666,28 @@ impl TestClient {
             .unwrap();
     }
 
+    /// Sends a message as it is, as a remote client answers the server.
+    pub fn send_msg(&mut self, msg: &ClientMsg) {
+        self.stream.write_all(&proto::encode_client(msg)).unwrap();
+    }
+
+    /// Waits up to ten seconds for the server to have asked this client's
+    /// computer for something `pred` matches, and gives it.
+    pub fn wait_desk(&mut self, what: &str, pred: impl Fn(&Desk) -> bool) -> Desk {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            self.pump(Duration::from_millis(50));
+            if let Some(found) = self.desk.iter().find(|d| pred(d)) {
+                return found.clone();
+            }
+            assert!(
+                Instant::now() < deadline,
+                "the server never asked for {what}; it asked for {:?}",
+                self.desk
+            );
+        }
+    }
+
     pub fn detach(&mut self) {
         let _ = self
             .stream
@@ -663,6 +709,7 @@ impl TestClient {
                 }
                 ServerMsg::Exit { message } => self.exit = Some(message),
                 ServerMsg::Reply { .. } => {}
+                ServerMsg::Desk(ask) => self.desk.push(ask),
             }
             next = self.rx.try_recv().ok();
         }

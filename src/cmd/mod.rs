@@ -37,6 +37,7 @@ pub mod skill_path;
 pub mod slack_relay;
 pub mod slack_updates_save;
 pub mod slot;
+pub mod ssh;
 pub mod statusline;
 pub mod tabs;
 pub mod today_save;
@@ -118,6 +119,16 @@ pub const COMMANDS: &[Command] = &[
         name: "headless-screen",
         run: headless::screen_main,
         about: "A headless client's whole screen, as text, --ansi with its colors, or --png <file>",
+    },
+    Command {
+        name: "ssh",
+        run: ssh::main,
+        about: "The workspace on another computer, as VS Code's remote window: Switchboard put there when it lacks this build, its links, copies and notifications here, its panes' ports forwarded here",
+    },
+    Command {
+        name: "remote-server",
+        run: ssh::server_main,
+        about: "Start the workspace's server here and print its socket (run by switchboard ssh on the host)",
     },
     Command {
         name: "update",
@@ -413,6 +424,7 @@ const OWN_HELP: &[&str] = &[
     "try",
     "update",
     "setup",
+    "ssh",
 ];
 
 /// The programs whose first word is one of a fixed set of subcommands, and

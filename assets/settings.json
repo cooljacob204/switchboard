@@ -596,6 +596,13 @@
     "default": true
   },
   {
+    "key": "view_ports",
+    "category": "Mission control: Ports",
+    "label": "Ports",
+    "description": "Mission control's Ports view, in a workspace attached with switchboard ssh: each port its panes' programs listen on, with its tab and where it is on your computer; Enter opens a forwarded one in your browser, f forwards or stops it. Off, the view is gone (ports are still forwarded as Remote's settings say)",
+    "default": true
+  },
+  {
     "key": "usage",
     "category": "Mission control: Usage",
     "label": "Usage",
@@ -1989,6 +1996,20 @@
     "category": "Slack relay",
     "label": "Prompts notify in quiet hours",
     "description": "Prompts, questions and dialogs still notify you during quiet hours. Off, during quiet hours they go to their tab's thread alone, with no line mentioning you, as the other kinds do",
+    "default": true
+  },
+  {
+    "key": "remote_forward_ports",
+    "category": "Remote",
+    "label": "Forward ports",
+    "description": "In a workspace attached with switchboard ssh, each port a pane's program starts listening on is forwarded to the same port on localhost on your computer (the next free one when that is taken), and stopped when it closes; the tab's sidebar card shows them. Off, ports are listed in the Ports view and forwarded only from there or M-p's \"Forward a port\"",
+    "default": true
+  },
+  {
+    "key": "remote_local_desktop",
+    "category": "Remote",
+    "label": "Your computer's browser, clipboard and notifications",
+    "description": "In a workspace attached with switchboard ssh, its links open in your computer's browser (in browser.json's profiles there), what it copies goes on your computer's clipboard, and its notifications show on your computer. Off, they act on the computer the workspace runs on, as before (a copy still reaches your clipboard through the terminal where it takes OSC 52)",
     "default": true
   }
 ]

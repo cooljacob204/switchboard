@@ -760,6 +760,7 @@ impl Client {
             xpixel: pixels(cols, CELL.0),
             ypixel: pixels(rows, CELL.1),
             cwd: None,
+            remote: false,
         }))?;
         let shared = Arc::new(Mutex::new(Shared {
             screen: Screen::new(cols, rows),

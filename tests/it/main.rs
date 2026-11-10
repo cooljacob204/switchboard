@@ -34,6 +34,7 @@ mod mux;
 mod notes_workspace;
 mod persist;
 mod pr_risk;
+mod remote;
 mod routines;
 mod setup;
 mod sidebar;

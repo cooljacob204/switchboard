@@ -209,7 +209,7 @@ impl Server {
                         message.unwrap_or_else(|| "the server ended the command".into())
                     ));
                 }
-                Some(ServerMsg::Output(_)) => {}
+                Some(ServerMsg::Output(_) | ServerMsg::Desk(_)) => {}
                 None => bail!("the server closed the connection without an answer"),
             }
         }

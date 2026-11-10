@@ -506,6 +506,7 @@ pub(crate) fn make_session(socket: &Path, cwd: Option<&Path>) -> Result<()> {
         xpixel: 0,
         ypixel: 0,
         cwd: cwd.map(|d| d.to_string_lossy().into_owned()),
+        remote: false,
     }))?;
     // The first thing drawn says the session is there.
     match proto::read_server(&mut stream) {

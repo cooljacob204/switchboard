@@ -1270,11 +1270,11 @@ fn run_with(
                     // Handed over before the next key, so quitting at once
                     // still opens it; only the watch runs on.
                     let before = crate::platform::front_app();
-                    match crate::links::open_url(&url) {
-                        Ok(()) => {
+                    match crate::links::open_url_elsewhere(&url) {
+                        Ok(elsewhere) => {
                             let tx = opened_tx.clone();
                             std::thread::spawn(move || {
-                                let shown = crate::links::front_changed(before);
+                                let shown = elsewhere || crate::links::front_changed(before);
                                 let _ = tx.send((words, Ok(shown)));
                             });
                         }

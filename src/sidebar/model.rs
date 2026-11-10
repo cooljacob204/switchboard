@@ -262,6 +262,9 @@ pub struct TabModel {
     /// The slot of the queue for heavy work a command in its panes waits
     /// for, else holds (src/slots).
     pub slot: Option<crate::slots::TabSlot>,
+    /// The ports its panes listen on in a remote workspace, and where each
+    /// is on your computer, in a few words (`⇄ :3000 :5173→5174`, src/remote).
+    pub ports: Option<String>,
 }
 
 impl TabModel {
@@ -327,6 +330,7 @@ impl TabModel {
             size: None,
             landing: None,
             slot: None,
+            ports: None,
         }
     }
 }

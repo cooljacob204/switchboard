@@ -80,6 +80,9 @@
 //!   tab of its own.
 //! - `worktree_sweep`: a worktree removed on its own once its work has
 //!   landed and no tab has it open, its branch kept.
+//! - `remote`: working on another computer over SSH, `switchboard ssh`:
+//!   Switchboard put there, its workspace attached, its links, clipboard
+//!   and notifications on yours, its panes' ports forwarded to yours.
 //!
 //! - `demo`: `switchboard demo`, a workspace of made-up data reaching no
 //!   service, with the strict stand-in services the tests share
@@ -114,6 +117,7 @@ pub mod photos;
 pub mod platform;
 pub mod presence;
 pub mod relay;
+pub mod remote;
 pub mod repos;
 pub mod requests;
 pub mod routines;

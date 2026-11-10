@@ -51,11 +51,24 @@ pub fn set_secret(service: &str, account: &str, value: &str) -> Result<String> {
     os::set_secret(service, account, value)
 }
 
-/// Puts text on the desktop's clipboard. Where there is no clipboard to reach
-/// (over SSH, a Linux with no desktop), this fails, and the server hands the
-/// text to its clients' terminals instead (OSC 52), which put it on the
-/// clipboard of the computer you are at.
+/// Puts text on the desktop's clipboard: in a workspace attached through
+/// `switchboard ssh`, the clipboard of the computer you're at
+/// (src/remote/desktop.rs). Where there is no clipboard to reach (a Linux
+/// with no desktop), this fails, and the server hands the text to its
+/// clients' terminals instead (OSC 52), which put it on the clipboard of
+/// the computer you are at.
 pub fn copy(text: &str) -> Result<()> {
+    let ask = crate::mux::proto::Desk::Copy {
+        text: text.to_string(),
+    };
+    if crate::remote::desktop::handed_on(&ask) {
+        return Ok(());
+    }
+    os::copy(text)
+}
+
+/// `copy` on this computer's clipboard, whatever is attached.
+pub fn copy_here(text: &str) -> Result<()> {
     os::copy(text)
 }
 
@@ -64,9 +77,23 @@ pub fn paste() -> Option<String> {
     os::paste()
 }
 
-/// A desktop notification (a macOS banner), titled `title`. Never fails: a
-/// desktop with no notifications shows none.
+/// A desktop notification (a macOS banner), titled `title`: in a workspace
+/// attached through `switchboard ssh`, on the computer you're at
+/// (src/remote/desktop.rs). Never fails: a desktop with no notifications
+/// shows none.
 pub fn notify(title: &str, text: &str) {
+    let ask = crate::mux::proto::Desk::Notify {
+        title: title.to_string(),
+        text: text.to_string(),
+    };
+    if crate::remote::desktop::handed_on(&ask) {
+        return;
+    }
+    os::notify(title, text)
+}
+
+/// `notify` on this computer, whatever is attached.
+pub fn notify_here(title: &str, text: &str) {
     os::notify(title, text)
 }
 
@@ -180,8 +207,25 @@ pub fn front_app() -> Option<String> {
 
 /// Opens a file or link with what the desktop opens it with (`open`;
 /// `xdg-open`, or Windows' own under WSL). Links Switchboard opens go
-/// through its Chrome-profile chooser (`browser.json`) first.
+/// through its Chrome-profile chooser (`browser.json`) first. In a
+/// workspace attached through `switchboard ssh`, a web link opens on the
+/// computer you're at (src/remote/desktop.rs); a file, which is on this
+/// computer, opens here.
 pub fn open(target: &str) -> Result<()> {
+    if crate::links::host_of(target).is_some() {
+        let ask = crate::mux::proto::Desk::Open {
+            url: target.to_string(),
+            as_site: None,
+        };
+        if crate::remote::desktop::handed_on(&ask) {
+            return Ok(());
+        }
+    }
+    os::open(target)
+}
+
+/// `open` on this computer, whatever is attached.
+pub fn open_here(target: &str) -> Result<()> {
     os::open(target)
 }
 

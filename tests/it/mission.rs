@@ -34,6 +34,7 @@ fn settings(server: &TestServer, extra: Value) {
         "view_relay": false,
         "view_reopen": false,
         "view_resources": false,
+        "view_ports": false,
         "usage": false,
         "view_keys": false,
         // The Reminders view too, which a test of reminders turns on.

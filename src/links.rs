@@ -221,10 +221,14 @@ const OPEN_HOLD: Duration = Duration::from_secs(1);
 /// Opens a link, then waits until another app comes to the front (the
 /// browser, or any you go to meanwhile), at most `OPEN_WAIT`, as daemon.js's
 /// `openUrl` waited on `frontApp`. Gives whether one did; where the app in
-/// front can't be told, true after a moment. Blocking.
+/// front can't be told, true after a moment, and at once where the link
+/// opened on another computer (the one a `switchboard ssh` client is on).
+/// Blocking.
 pub(crate) fn open_url_watched(url: &str) -> Result<bool> {
     let before = platform::front_app();
-    open_url(url)?;
+    if open_url_elsewhere(url)? {
+        return Ok(true);
+    }
     Ok(front_changed(before))
 }
 
@@ -253,11 +257,41 @@ pub(crate) fn open_url(url: &str) -> Result<()> {
     open_url_as(url, None)
 }
 
+/// `open_url`, giving whether the link opened on another computer, the one
+/// a `switchboard ssh` client is on (src/remote/desktop.rs), where nothing
+/// comes to the front on this one.
+pub(crate) fn open_url_elsewhere(url: &str) -> Result<bool> {
+    opened_where(url, None)
+}
+
 /// `open_url`, the profile chosen as for a link on the site `as_site`
 /// rather than the link's own, when given: the AWS login's, whose pages are
 /// on AWS's sign-in hosts but whose profile is the one browser.json gives
-/// its access portal, `awsapps.com`, as aws-login.sh chose it.
+/// its access portal, `awsapps.com`, as aws-login.sh chose it. In a
+/// workspace attached through `switchboard ssh` the link opens on the
+/// computer you're at, in its browser.json's profile (src/remote/desktop.rs).
 pub fn open_url_as(url: &str, as_site: Option<&str>) -> Result<()> {
+    opened_where(url, as_site).map(|_| ())
+}
+
+/// `open_url_as`, giving whether it opened on another computer.
+fn opened_where(url: &str, as_site: Option<&str>) -> Result<bool> {
+    let url = url.trim();
+    if host_of(url).is_none() {
+        bail!("{url} isn't a web link");
+    }
+    let ask = crate::mux::proto::Desk::Open {
+        url: url.to_string(),
+        as_site: as_site.map(str::to_string),
+    };
+    if crate::remote::desktop::handed_on(&ask) {
+        return Ok(crate::remote::desktop::went_elsewhere());
+    }
+    open_here(url, as_site).map(|()| false)
+}
+
+/// `open_url_as` on this computer, whatever is attached.
+pub fn open_here(url: &str, as_site: Option<&str>) -> Result<()> {
     let url = url.trim();
     if host_of(url).is_none() {
         bail!("{url} isn't a web link");
@@ -275,14 +309,14 @@ pub fn open_url_as(url: &str, as_site: Option<&str>) -> Result<()> {
         Browser::Chrome(profile) => match open_in_chrome(url, &profile) {
             Ok(()) => Ok(()),
             // No Chrome to run: the link still opens, in the default browser.
-            Err(_) => platform::open(url),
+            Err(_) => platform::open_here(url),
         },
         // The AWS login with no profile named for it still opens in Chrome,
         // in the profile Chrome picks, as aws-login.sh's BROWSER did.
         Browser::Default if as_site.is_some() && profiles_on => {
-            open_in_chrome(url, "").or_else(|_| platform::open(url))
+            open_in_chrome(url, "").or_else(|_| platform::open_here(url))
         }
-        Browser::Default => platform::open(url),
+        Browser::Default => platform::open_here(url),
     }
 }
 

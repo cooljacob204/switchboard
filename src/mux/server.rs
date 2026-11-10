@@ -92,6 +92,8 @@ pub enum Event {
         /// Where the terminal's `switchboard` ran: a session made for it
         /// starts there.
         cwd: Option<PathBuf>,
+        /// Attached through `switchboard ssh` (src/remote).
+        remote: bool,
         tx: mpsc::UnboundedSender<ServerMsg>,
         /// Its connection, for handing it to a new build.
         hold: mpsc::UnboundedSender<Hold>,
@@ -167,6 +169,9 @@ pub enum Event {
     /// A repository's landed worktrees swept, off the task
     /// (src/worktree_sweep).
     Sweep(crate::worktree_sweep::serve::SweepEvent),
+    /// A remote workspace's ports read, a remote client's answer, or a
+    /// link, copy or notification to hand on (src/remote).
+    Remote(crate::remote::RemoteEvent),
     Tick,
     Quit,
 }
@@ -419,6 +424,10 @@ pub struct Client {
     /// Terminal, `client::attaching_as`), by which src/mux/graphics.rs
     /// decides how anything terminal-dependent is drawn for it.
     pub term: String,
+    /// Attached through `switchboard ssh` from another computer, which
+    /// opens the links, takes the clipboard and notifications, and
+    /// forwards the panes' ports (src/remote).
+    pub remote: bool,
     parser: Parser,
     prefix: bool,
     pub(super) screen: Screen,
@@ -580,6 +589,9 @@ pub struct Server {
     pub sixel: super::sixel::Sixel,
     /// What each pane's Claude session did, for its tab's history (src/history).
     pub history: crate::history::Histories,
+    /// The ports a remote workspace's panes listen on, and their forwards
+    /// (src/remote).
+    pub remote: crate::remote::Remote,
 }
 
 // ── Running it ──────────────────────────────────────────────────────────────
@@ -638,6 +650,12 @@ async fn run(handover: Option<PathBuf>) -> Result<()> {
     };
     let (tx, mut rx) = mpsc::unbounded_channel::<Event>();
     let (pane_tx, mut pane_rx) = mpsc::unbounded_channel::<PaneEvent>();
+    // A link, copy or notification made anywhere in this process goes to
+    // the server's task, which hands it to a remote client or does it here.
+    let to_task = tx.clone();
+    crate::remote::desktop::serve_from(move |ask| {
+        let _ = to_task.send(Event::Remote(crate::remote::RemoteEvent::Desk(ask)));
+    });
     let busy = Arc::new(AtomicUsize::new(0));
     let mut acceptor = Acceptor::start(listener, tx.clone(), busy.clone());
     spawn_signals(tx.clone());
@@ -885,6 +903,7 @@ async fn connection(stream: tokio::net::UnixStream, tx: mpsc::UnboundedSender<Ev
             xpixel,
             ypixel,
             cwd,
+            remote,
         } => {
             let id = ClientId(NEXT_CLIENT.fetch_add(1, Ordering::Relaxed));
             let (otx, orx) = mpsc::unbounded_channel::<ServerMsg>();
@@ -897,6 +916,7 @@ async fn connection(stream: tokio::net::UnixStream, tx: mpsc::UnboundedSender<Ev
                     rows,
                     term,
                     cwd: cwd.map(PathBuf::from),
+                    remote,
                     tx: otx,
                     hold: htx,
                 })
@@ -1038,6 +1058,14 @@ pub(super) async fn serve_client(
                 if let Some((w, h)) = super::terminal::cell_of(cols, rows, xpixel, ypixel) {
                     let _ = tx.send(Event::Cell(w, h));
                 }
+            }
+            Ok(Some(ClientMsg::Forwarded { port, local, error })) => {
+                let _ = tx.send(Event::Remote(crate::remote::RemoteEvent::Forwarded {
+                    client: id,
+                    port,
+                    local,
+                    error,
+                }));
             }
             Ok(Some(ClientMsg::Detach)) | Err(_) => {
                 input.clear();
@@ -1217,6 +1245,7 @@ impl Server {
             history: Default::default(),
             upgrade: Default::default(),
             sixel: super::sixel::Sixel::new(),
+            remote: Default::default(),
         }
     }
 
@@ -1239,9 +1268,10 @@ impl Server {
                 rows,
                 term,
                 cwd,
+                remote,
                 tx,
                 hold,
-            } => self.attach(id, session, cols, rows, term, cwd, tx, hold),
+            } => self.attach(id, session, cols, rows, term, cwd, remote, tx, hold),
             Event::Input(id, bytes) => self.input(id, &bytes),
             Event::Resize(id, cols, rows) => self.resize_client(id, cols, rows),
             Event::Cell(w, h) => self.terminal_cell((w, h)),
@@ -1319,6 +1349,7 @@ impl Server {
             Event::Awake(event) => self.awake_event(event),
             Event::Sweep(event) => self.sweep_event(event),
             Event::Routines(event) => self.routines_event(event),
+            Event::Remote(event) => self.remote_event(event),
             Event::Tick => {
                 self.reload_settings_if_changed();
                 self.sixel_tick();
@@ -1344,6 +1375,7 @@ impl Server {
                 self.statusline_tick();
                 self.history_tick();
                 self.notice_history_tick();
+                self.remote_tick();
             }
             Event::Quit => self.quit = true,
         }
@@ -2371,6 +2403,7 @@ impl Server {
         rows: u16,
         term: String,
         cwd: Option<PathBuf>,
+        remote: bool,
         tx: mpsc::UnboundedSender<ServerMsg>,
         hold: mpsc::UnboundedSender<Hold>,
     ) {
@@ -2394,6 +2427,7 @@ impl Server {
             cols,
             rows,
             term,
+            remote,
             parser: Parser::new(),
             prefix: false,
             screen: Screen::default(),
@@ -2438,6 +2472,7 @@ impl Server {
         cols: u16,
         rows: u16,
         term: String,
+        remote: bool,
         idle: Duration,
         input: Vec<u8>,
         output: Vec<u8>,
@@ -2483,6 +2518,7 @@ impl Server {
             cols,
             rows,
             term,
+            remote,
             parser: Parser::new(),
             prefix: false,
             screen: Screen::default(),
@@ -2642,6 +2678,8 @@ impl Server {
         if !a_view_shows {
             self.trail_view_is(session, None);
         }
+        // Its port forwards go with it (src/remote).
+        self.remote_gone();
     }
 
     /// The client acting now: the most recently active one.
@@ -2669,24 +2707,31 @@ impl Server {
         self.dirty_session(&name);
     }
 
-    /// Puts text on the clipboard: through the clients' terminals (OSC 52),
+    /// Puts text on the clipboard: through the client's terminal (OSC 52),
     /// which reaches the computer you're at even over SSH, and the desktop's
-    /// own clipboard where there is one.
+    /// own clipboard where there is one: that of the computer the client is
+    /// on, for one attached through `switchboard ssh` (src/remote), else
+    /// this one's.
     pub fn to_clipboard(&mut self, client: Option<ClientId>, text: &str) {
         let osc = format!("\x1b]52;c;{}\x07", util::base64(text.as_bytes()));
-        let targets: Vec<ClientId> = match client.or_else(|| self.latest_client()) {
-            Some(c) => vec![c],
-            None => Vec::new(),
-        };
-        for id in targets {
-            if let Some(c) = self.clients.get(&id) {
-                let _ = c.tx.send(ServerMsg::Output(osc.clone().into_bytes()));
-            }
+        let target = client.or_else(|| self.latest_client());
+        if let Some(c) = target.and_then(|id| self.clients.get(&id)) {
+            let _ = c.tx.send(ServerMsg::Output(osc.into_bytes()));
         }
-        let text = text.to_string();
-        tokio::task::spawn_blocking(move || {
-            let _ = crate::platform::copy(&text);
-        });
+        let remote = target
+            .filter(|id| self.clients.get(id).is_some_and(|c| c.remote))
+            .filter(|_| crate::settings::is_on("remote_local_desktop"));
+        let ask = crate::mux::proto::Desk::Copy {
+            text: text.to_string(),
+        };
+        match remote {
+            Some(id) => {
+                if let Some(c) = self.clients.get(&id) {
+                    let _ = c.tx.send(ServerMsg::Desk(ask));
+                }
+            }
+            None => crate::remote::desktop::here_in_background(ask),
+        }
     }
 
     /// Puts what a pane's program stores (OSC 52) on the clipboard, only
@@ -3349,6 +3394,7 @@ impl Server {
                     self.say(Some(id), "Nothing chosen here has a menu.");
                 }
             }
+            Action::Remote(command) => self.remote_command(id, command),
             // Taken by `sidebar_before_action`.
             Action::FocusSidebar | Action::ToggleSidebar => {}
         }

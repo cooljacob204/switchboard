@@ -8200,9 +8200,10 @@ mod tests {
         );
         m.snap.rules.ux2 = true;
         m.view = 1;
-        m.size = (160, 40);
+        // Tall enough for every category and the files below them.
+        m.size = (160, 44);
         m.cursor = at as isize;
-        let (lines, hits, images, _) = drawn(&m, 160, 40);
+        let (lines, hits, images, _) = drawn(&m, 160, 44);
         let text = texts(&lines);
         let all_text = text.join("\n");
         // The panel: the Sidebar's chip of 1 before its count, the

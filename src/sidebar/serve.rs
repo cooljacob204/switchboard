@@ -727,6 +727,7 @@ impl Server {
         t.background = work.count;
         t.monitors = work.monitors.clone();
         t.round = round;
+        t.ports = self.tab_ports(id);
         t.tab_loop = work
             .loop_run
             .clone()

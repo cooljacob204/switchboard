@@ -68,6 +68,13 @@
 //!                                        app's palette asks this, and its
 //!                                        `gw` presses `work-on-item <note>
 //!                                        <line>` (src/notes/serve.rs)
+//! desktop open [--as <site>] <url> | desktop copy | desktop notify <title> <text>
+//!                                        a link, a copy (stdin) or a
+//!                                        notification handed to the computer
+//!                                        a `switchboard ssh` client is on;
+//!                                        3 when none is attached, for the
+//!                                        program asking to do it itself
+//!                                        (src/remote/desktop.rs)
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -116,6 +123,7 @@ pub const NAMES: &[&str] = &[
     "autopilot-board",
     "autopilot-pause",
     "slot-report",
+    "desktop",
 ];
 
 /// How each command is used, which `--help` (or `-h`) after its name prints.
@@ -244,12 +252,16 @@ pub const USAGE: &[(&str, &str)] = &[
         "slot-report",
         "slot-report wait|hold <kind> <pid> [index cap child] -- command | done <pid>: from the cargo, npm and pnpm stand-ins, a command in the calling pane waiting for, holding or letting go a slot in the queue for heavy work",
     ),
+    (
+        "desktop",
+        "desktop open [--as <site>] <url> | desktop copy | desktop notify <title> <text>: a link, a copy (its text on stdin) or a notification handed to the computer a switchboard ssh client is on; exits 3 when none is attached",
+    ),
 ];
 
-/// The commands that read their stdin (a Claude Code hook's JSON); no other
-/// command's stdin is read, since one run with a pipe nobody closes would
-/// wait for it forever.
-pub const TAKES_STDIN: &[&str] = &["hook"];
+/// The commands that read their stdin (a Claude Code hook's JSON, the text
+/// `desktop copy` copies); no other command's stdin is read, since one run
+/// with a pipe nobody closes would wait for it forever.
+pub const TAKES_STDIN: &[&str] = &["hook", "desktop"];
 
 /// A command's arguments: its flags, with or without a value, and the rest.
 struct Args {
@@ -493,6 +505,18 @@ impl Server {
             }
             .map(|said| Reply::ok(format!("{said}\n"))),
             "sidebar-repo" => self.cmd_sidebar_repo(rest, cwd, caller),
+            "desktop" => crate::remote::desktop::parse_command(rest, stdin).map(|ask| {
+                if self.hand_to_desk(ask) {
+                    Reply::ok("")
+                } else {
+                    Reply {
+                        code: crate::remote::desktop::NOT_HANDED,
+                        stdout: String::new(),
+                        stderr: "no computer is attached with switchboard ssh to hand it to\n"
+                            .into(),
+                    }
+                }
+            }),
             "save" => super::persist::save_now(self)
                 .map(|file| Reply::ok(format!("{}\n", file.display())))
                 .map_err(|e| format!("{e:#}")),
@@ -672,7 +696,9 @@ impl Server {
         let clients: Vec<Value> = self
             .clients
             .values()
-            .map(|c| json!({ "session": c.session, "cols": c.cols, "rows": c.rows }))
+            .map(|c| {
+                json!({ "session": c.session, "cols": c.cols, "rows": c.rows, "remote": c.remote })
+            })
             .collect();
         // How long since a key was last pressed in a client, which the Slack
         // relay folds into the desktop's reading as the server's own `away`
@@ -686,6 +712,10 @@ impl Server {
             "typed": self.typed,
             // Whether the computer is held awake, and what holds it (src/awake).
             "awake": self.awake_json(),
+            // The build, which `switchboard ssh` compares with its own; the
+            // ports a remote workspace's panes listen on (src/remote).
+            "version": crate::update::version_line(),
+            "ports": self.ports_json(),
         })
     }
 
