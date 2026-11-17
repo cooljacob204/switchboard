@@ -345,10 +345,9 @@ fn switchboard_ssh_installs_this_build_attaches_forwards_and_opens_links_here() 
     type_line(&local, &format!("{BIN} ssh devbox"));
     client.wait_text("install it in ~/.local/bin?");
     type_line(&local, "");
-    // A first install: its guided setup, run there in this terminal.
+    // A first install: its guided setup, run there in this terminal (with
+    // Claude Code's plugin, it asks nothing on a host like this one).
     client.wait_text("Run Switchboard's setup on devbox now?");
-    type_line(&local, "");
-    client.wait_text("Add Switchboard's statusline and permissions");
     type_line(&local, "");
     // Installed, its server started, and this terminal attached to it as
     // remote.
@@ -361,13 +360,6 @@ fn switchboard_ssh_installs_this_build_attaches_forwards_and_opens_links_here() 
         .unwrap();
     let mine = Command::new(BIN).arg("--version").output().unwrap();
     assert_eq!(installed.stdout, mine.stdout, "this build, exactly");
-    // Its guided setup ran there, the statusline said yes to.
-    let claude_settings =
-        std::fs::read_to_string(host.join(".claude/settings.json")).unwrap_or_default();
-    assert!(
-        claude_settings.contains("switchboard statusline"),
-        "its setup ran there: {claude_settings}"
-    );
     // What the pane shows is the host's workspace.
     let tab = host_list(&host_socket).unwrap()["sessions"][0]["tabs"][0]["id"]
         .as_str()
@@ -418,9 +410,11 @@ fn switchboard_ssh_installs_this_build_attaches_forwards_and_opens_links_here() 
         desktop_log(&local).contains("https://example.com/from-the-host")
     });
 
-    // Detached, it says so, and stops its forwards.
+    // Detached, it says so, and stops its forwards; the pane shows again
+    // what was said before attaching, the host's guided setup among it.
     on_host(&host_socket, &["detach"]);
     client.wait_text("[detached]");
+    client.wait_text("Optional, each for what it names");
     let log = std::fs::read_to_string(&log).unwrap();
     let forward = forwarded(&log).unwrap();
     let spec = forward
@@ -496,4 +490,154 @@ fn a_box_with_another_build_gets_this_one_without_its_setup_offered_again() {
         .unwrap();
     let mine = Command::new(BIN).arg("--version").output().unwrap();
     assert_eq!(installed.stdout, mine.stdout);
+}
+
+/// The key a test's release is signed with, which a debug build trusts
+/// through `SWITCHBOARD_RELEASE_KEY` (`TRUSTED`), or one no build trusts.
+#[cfg(feature = "net")]
+fn signing_key(seed: u8) -> ssh_key::PrivateKey {
+    ssh_key::PrivateKey::from(ssh_key::private::Ed25519Keypair::from_seed(&[seed; 32]))
+}
+#[cfg(feature = "net")]
+const TRUSTED: u8 = 1;
+
+/// This version's release for an Apple silicon Mac on a GitHub of the
+/// test's own, as the release workflow publishes one: its archive holding
+/// `binary` in a folder named after it, with its checksum and its signature
+/// by the key from `seed`. Served at its tag, as `release::tagged` asks.
+#[cfg(feature = "net")]
+fn publish_release(
+    routes: &std::sync::Mutex<std::collections::HashMap<String, Vec<u8>>>,
+    url: &str,
+    binary: &[u8],
+    seed: u8,
+) {
+    use switchboard::update::{install, release};
+    let version = release::Version::current();
+    let target = "aarch64-apple-darwin";
+    let name = release::archive_name(&version, target);
+    let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+    {
+        let mut tar = tar::Builder::new(&mut gz);
+        let mut header = tar::Header::new_gnu();
+        header.set_size(binary.len() as u64);
+        header.set_mode(0o755);
+        header.set_cksum();
+        let inside = format!("{}/switchboard", name.trim_end_matches(".tar.gz"));
+        tar.append_data(&mut header, inside, binary).unwrap();
+        tar.finish().unwrap();
+    }
+    let archive = gz.finish().unwrap();
+    let signature = signing_key(seed)
+        .sign(
+            install::SIGNATURE_NAMESPACE,
+            ssh_key::HashAlg::Sha512,
+            &archive,
+        )
+        .unwrap()
+        .to_pem(ssh_key::LineEnding::LF)
+        .unwrap();
+    let sum = format!("{}  {name}\n", install::sha256_hex(&archive));
+    let mut routes = routes.lock().unwrap();
+    let mut assets = Vec::new();
+    for (file, body) in [
+        (name.clone(), archive),
+        (format!("{name}.sha256"), sum.into_bytes()),
+        (format!("{name}.sig"), signature.into_bytes()),
+    ] {
+        assets.push(json!({ "name": file, "browser_download_url": format!("{url}/dl/{file}") }));
+        routes.insert(format!("/dl/{file}"), body);
+    }
+    let tag = format!("v{version}");
+    let json = json!({
+        "tag_name": tag,
+        "draft": false,
+        "prerelease": false,
+        "published_at": "2026-11-01T12:00:00Z",
+        "html_url": format!("https://github.com/{}/releases/tag/{tag}", release::REPO),
+        "assets": assets,
+    });
+    routes.insert(
+        format!("/repos/{}/releases/tags/{tag}", release::REPO),
+        json.to_string().into_bytes(),
+    );
+}
+
+#[cfg(feature = "net")]
+#[test]
+fn a_host_of_another_system_gets_this_versions_release_checked_here_and_refuses_a_bad_one() {
+    use std::collections::HashMap;
+    use std::sync::{Arc, Mutex};
+    use switchboard::demo::services::{Fake, Reply, Service};
+
+    let r = with_a_host();
+    // GitHub's API here, off for the workspace, so the release is asked for
+    // with no token, as from someone with no gh sign-in.
+    common::write_settings(&r.local.home, json!({ "github": false }));
+    let routes: Arc<Mutex<HashMap<String, Vec<u8>>>> = Arc::default();
+    let served = routes.clone();
+    let github = Fake::start(Service::GitHubPublic { token: None }, move |request| {
+        let kind = if request.path().starts_with("/dl/") {
+            "application/octet-stream"
+        } else {
+            "application/json; charset=utf-8"
+        };
+        let routes = served.lock().unwrap();
+        routes
+            .get(request.path())
+            .map(|body| Reply::bytes(200, kind, body.clone()))
+    });
+    // The host says it is an Apple silicon Mac, so it needs the release.
+    let bin = r.host.join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let uname = bin.join("uname");
+    std::fs::write(&uname, "#!/bin/sh\necho 'Darwin arm64'\n").unwrap();
+    std::fs::set_permissions(&uname, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    // The release's binary: this version by its own words, the test's
+    // build doing everything else, since the host runs on this computer.
+    let version = env!("CARGO_PKG_VERSION");
+    let binary = format!(
+        "#!/bin/sh\ncase \"$1\" in\n  --version) echo 'switchboard {version} (release)' ;;\n  *) exec '{BIN}' \"$@\" ;;\nesac\n"
+    );
+    let key = signing_key(TRUSTED).public_key().to_openssh().unwrap();
+    let command = format!(
+        "env SWITCHBOARD_GITHUB_API={} SWITCHBOARD_RELEASE_KEY='{key}' {BIN} ssh devbox",
+        github.url
+    );
+    let mut client = r.local.attach(150, 40);
+    client.wait_text("$");
+
+    // Signed by a key no build trusts, as a release changed after it was
+    // published would be: refused here, and nothing put on the host.
+    publish_release(&routes, &github.url, binary.as_bytes(), TRUSTED + 1);
+    type_line(&r.local, &command);
+    client.wait_text("install it in ~/.local/bin?");
+    type_line(&r.local, "");
+    client.wait_text("isn't signed by Switchboard's release key");
+    assert!(!r.host.join(".local/bin/switchboard").exists());
+
+    // Signed by the release key: downloaded here, checked, copied over and
+    // put in place, then attached.
+    publish_release(&routes, &github.url, binary.as_bytes(), TRUSTED);
+    type_line(&r.local, &command);
+    client.wait_text("install it in ~/.local/bin?");
+    type_line(&r.local, "");
+    client.wait_text("Run Switchboard's setup on devbox now?");
+    type_line(&r.local, "n");
+    client.wait_for("attached to the host's server", |_| {
+        attached_remote(&r.socket)
+    });
+    assert_eq!(
+        std::fs::read_to_string(r.host.join(".local/bin/switchboard")).unwrap(),
+        binary,
+        "the release's binary, as it was published"
+    );
+    let asked: Vec<String> = github.seen().iter().map(|q| q.path().to_string()).collect();
+    assert!(
+        asked
+            .iter()
+            .any(|p| p.ends_with(&format!("/releases/tags/v{version}"))),
+        "{asked:?}"
+    );
+    assert!(asked.iter().any(|p| p.ends_with(".sig")), "{asked:?}");
 }

@@ -7,13 +7,14 @@
 //! a protocol that changes with it (src/mux/proto.rs). A host on this
 //! computer's system gets this very binary, copied over the SSH connection,
 //! so a build from a clone works too; one on another system gets the
-//! release of this version for its target, downloaded there and checked
-//! against its SHA-256 as install.sh checks it, or, where the host can't
-//! reach GitHub, downloaded here, checked here and copied over. Either way
-//! it is written beside the old one under a name of its own, run once
-//! (`--version`, named `switchboard` in a folder of its own, as install.sh
-//! runs it) to show it starts there and is the build meant, and only then
-//! renamed into place, so a half-copied binary is never in its place.
+//! release of this version for its target, downloaded on this computer and
+//! refused unless its SHA-256 and its signature by Switchboard's release key
+//! check out, as `switchboard update` checks one (`update::release_binary`),
+//! then copied over the same way. Either way it is written beside the old
+//! one under a name of its own, run once (`--version`, named `switchboard`
+//! in a folder of its own, as install.sh runs it) to show it starts there
+//! and is the build meant, and only then renamed into place, so a
+//! half-copied binary is never in its place.
 //!
 //! The scripts are POSIX sh, run by the host's `sh -s` with their few
 //! arguments after `--`, since the command line ssh hands the host is read
@@ -178,14 +179,6 @@ fn system_name(os: &str) -> &str {
     }
 }
 
-/// Where a release's files are downloaded from: `<base>/<archive>`.
-pub fn release_base(version: &str) -> String {
-    format!(
-        "https://github.com/{}/releases/download/v{version}",
-        release::REPO
-    )
-}
-
 /// Makes a folder of its own beside the host's binary for the new one,
 /// and prints it, for the binary to be copied into as `switchboard`.
 /// `$1` makes its name the host's own (this process's id).
@@ -201,7 +194,7 @@ printf '%s\n' "$new"
 /// What puts a binary written into `$1/switchboard` in place: run once
 /// under its own name, it must say it is version `$2` (any commit when
 /// `$3` is `any`, else exactly `$2`), then it is renamed over the old one.
-/// Prints what it said. Shared by `PLACE` and `DOWNLOAD`.
+/// Prints what it said.
 const PLACE_BODY: &str = r#"place() {
   new=$1
   chmod 755 "$new/switchboard"
@@ -229,65 +222,6 @@ const PLACE_BODY: &str = r#"place() {
 /// `PREPARE` made, `$2` the build it must say, `$3` `exact` or `any`.
 pub fn place_script() -> String {
     format!("set -eu\n{PLACE_BODY}place \"$1\" \"$2\" \"$3\"\n")
-}
-
-/// The code `DOWNLOAD` ends with when the host can't download the release
-/// (no curl or wget, or no way out to GitHub), so it is downloaded here
-/// and copied over instead.
-pub const CANT_DOWNLOAD: i32 = 10;
-
-/// Downloads a release's archive for the host's target and its checksum
-/// there, checks one against the other as install.sh does, and puts the
-/// binary in it in place: `$1` the version, `$2` the target, `$3` where
-/// the files are (`release_base`), `$4` this process's id.
-pub fn download_script() -> String {
-    format!(
-        r#"set -eu
-{PLACE_BODY}
-fetch() {{
-  if command -v curl >/dev/null 2>&1; then
-    curl -fsSL --retry 2 -o "$2" "$1"
-  elif command -v wget >/dev/null 2>&1; then
-    wget -q -O "$2" "$1"
-  else
-    return 1
-  fi
-}}
-sha256() {{
-  if command -v sha256sum >/dev/null 2>&1; then
-    sum=$(sha256sum "$1")
-  elif command -v shasum >/dev/null 2>&1; then
-    sum=$(shasum -a 256 "$1")
-  else
-    echo "neither sha256sum nor shasum is installed there, so the download can't be checked" >&2
-    exit 14
-  fi
-  printf '%s\n' "${{sum%% *}}" | tr 'A-F' 'a-f'
-}}
-archive="switchboard-$1-$2.tar.gz"
-tmp=$(mktemp -d 2>/dev/null || mktemp -d -t switchboard)
-trap 'rm -rf "$tmp"' EXIT
-fetch "$3/$archive" "$tmp/$archive" || exit {CANT_DOWNLOAD}
-fetch "$3/$archive.sha256" "$tmp/$archive.sha256" || exit {CANT_DOWNLOAD}
-expected=$(sed -n '1s/^[[:space:]]*\([0-9A-Fa-f]\{{64\}}\).*/\1/p' "$tmp/$archive.sha256" | tr 'A-F' 'a-f')
-[ -n "$expected" ] || {{ echo "$archive.sha256 doesn't hold a SHA-256" >&2; exit 11; }}
-actual=$(sha256 "$tmp/$archive")
-[ "$actual" = "$expected" ] || {{
-  echo "$archive isn't the file that was published (its SHA-256 is $actual, the release says $expected); nothing was installed" >&2
-  exit 11
-}}
-mkdir "$tmp/unpacked"
-tar -xzf "$tmp/$archive" -C "$tmp/unpacked"
-binary=$(find "$tmp/unpacked" -type f -name switchboard | head -n 1)
-[ -n "$binary" ] || {{ echo "$archive has no switchboard in it" >&2; exit 11; }}
-mkdir -p "$HOME/.local/bin"
-new="$HOME/.local/bin/.switchboard.new.$4"
-rm -rf "$new"
-mkdir "$new"
-cp "$binary" "$new/switchboard"
-place "$new" "$1" any
-"#
-    )
 }
 
 /// The host's server restarted on the binary just put in place, keeping
@@ -481,75 +415,6 @@ mod tests {
         assert!(!std::path::Path::new(&new).exists());
         let kept = std::fs::read_to_string(home.join(".local/bin/switchboard")).unwrap();
         assert!(kept.contains(LINE));
-        let _ = std::fs::remove_dir_all(&home);
-    }
-
-    #[test]
-    fn a_release_is_downloaded_checked_and_put_in_place() {
-        if !std::path::Path::new("/usr/bin/curl").exists() {
-            return;
-        }
-        let home = temp_home();
-        let files = home.join("release");
-        std::fs::create_dir_all(&files).unwrap();
-        let target = "x86_64-unknown-linux-gnu";
-        let name = format!("switchboard-0.4.1-{target}.tar.gz");
-        // The archive as the release workflow makes it: a folder holding
-        // the binary.
-        let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
-        {
-            let mut tar = tar::Builder::new(&mut gz);
-            let body = fake_binary("0.4.1 (abcdefabcdef)");
-            let mut header = tar::Header::new_gnu();
-            header.set_size(body.len() as u64);
-            header.set_mode(0o755);
-            header.set_cksum();
-            tar.append_data(
-                &mut header,
-                format!("switchboard-0.4.1-{target}/switchboard"),
-                body.as_bytes(),
-            )
-            .unwrap();
-            tar.finish().unwrap();
-        }
-        let archive = gz.finish().unwrap();
-        std::fs::write(files.join(&name), &archive).unwrap();
-        let sum = crate::update::install::sha256_hex(&archive);
-        std::fs::write(
-            files.join(format!("{name}.sha256")),
-            format!("{sum}  {name}\n"),
-        )
-        .unwrap();
-        let base = format!("file://{}", files.display());
-        let out = run(&home, &download_script(), &["0.4.1", target, &base, "5"]);
-        assert!(
-            out.status.success(),
-            "{}",
-            String::from_utf8_lossy(&out.stderr)
-        );
-        assert_eq!(
-            String::from_utf8_lossy(&out.stdout).trim(),
-            "0.4.1 (abcdefabcdef)"
-        );
-
-        // A checksum that doesn't match leaves it as it was.
-        std::fs::write(
-            files.join(format!("{name}.sha256")),
-            format!("{}  {name}\n", "0".repeat(64)),
-        )
-        .unwrap();
-        std::fs::remove_file(home.join(".local/bin/switchboard")).unwrap();
-        let out = run(&home, &download_script(), &["0.4.1", target, &base, "6"]);
-        assert_eq!(out.status.code(), Some(11));
-        assert!(!home.join(".local/bin/switchboard").exists());
-
-        // Nowhere to download from.
-        let out = run(
-            &home,
-            &download_script(),
-            &["0.4.1", target, "file:///nowhere/at/all", "7"],
-        );
-        assert_eq!(out.status.code(), Some(CANT_DOWNLOAD));
         let _ = std::fs::remove_dir_all(&home);
     }
 }

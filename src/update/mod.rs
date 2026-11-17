@@ -352,6 +352,18 @@ fn offer_upgrade(version: &Version) {
 /// signature, refuses it unless both check out, and puts the binary in it in place of `binary`,
 /// saying what it does as it goes. Whatever fails leaves `binary` as it was.
 pub fn install_release(chosen: &Release, target: &str, binary: &Path) -> Result<String> {
+    let new = release_binary(chosen, target, "switchboard update")?;
+    let said = install::replace(binary, &new)?;
+    println!("Updated {} to switchboard {said}.", paths::tilde(binary));
+    Ok(said)
+}
+
+/// The binary in a release's archive for `target`: the archive downloaded
+/// with its checksum and signature and refused unless both check out,
+/// saying what it does as it goes. `source` says what asked, for the
+/// request audit: `switchboard update`, or `switchboard ssh` for a host of
+/// another system (src/cmd/ssh.rs).
+pub fn release_binary(chosen: &Release, target: &str, source: &str) -> Result<Vec<u8>> {
     let files = chosen.files_for(target).ok_or_else(|| {
         anyhow!(
             "release {} has no archive for {target} with its checksum and signature",
@@ -361,18 +373,15 @@ pub fn install_release(chosen: &Release, target: &str, binary: &Path) -> Result<
     let name = &files.archive.name;
     println!("Downloading {name}…");
     let (bytes, sum, signature) = util::block_on(async {
-        let bytes = release::download(files.archive, "switchboard update").await?;
-        let sum = release::download(files.checksum, "switchboard update").await?;
-        let signature = release::download(files.signature, "switchboard update").await?;
+        let bytes = release::download(files.archive, source).await?;
+        let sum = release::download(files.checksum, source).await?;
+        let signature = release::download(files.signature, source).await?;
         anyhow::Ok((bytes, sum, signature))
     })?;
     install::verify(&bytes, &String::from_utf8_lossy(&sum), name)?;
     install::verify_signature(&bytes, &String::from_utf8_lossy(&signature), name)?;
     println!("Checked its checksum, and its signature by Switchboard's release key.");
-    let new = install::binary_from(&bytes)?;
-    let said = install::replace(binary, &new)?;
-    println!("Updated {} to switchboard {said}.", paths::tilde(binary));
-    Ok(said)
+    install::binary_from(&bytes)
 }
 
 /// The guided setup, from the binary at `binary` (the new one, after an

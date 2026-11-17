@@ -147,7 +147,16 @@ fn attach_once(ssh: &Ssh, desk: &Arc<SshDesk>) -> Result<Ended> {
     }
     let out = ssh.script(install::START, &[])?;
     if !out.status.success() {
-        bail!("its server didn't start: {}", said(&out.stderr));
+        let why = said(&out.stderr);
+        // A build from before `remote-server` (as `cmd::run` says of a name
+        // it lacks): on a host of another system, this version's release
+        // when it was cut before switchboard ssh.
+        if why.contains("no command named remote-server") {
+            bail!(
+                "its server didn't start: {why}\nThe Switchboard there is a build from before switchboard ssh; build this version there from source and put it in ~/.local/bin, where switchboard ssh finds it"
+            );
+        }
+        bail!("its server didn't start: {why}");
     }
     let remote = String::from_utf8_lossy(&out.stdout)
         .lines()
@@ -273,44 +282,27 @@ fn guided_setup(ssh: &Ssh, home: &str) -> Result<()> {
     Ok(())
 }
 
-/// The release of `version` for `target`, downloaded on the host and put
-/// in place there, or, where the host can't download it, downloaded and
-/// checked here and copied over. Gives what it said of its version.
+/// The release of `version` for `target`, downloaded here and refused
+/// unless its checksum and its signature by Switchboard's release key check
+/// out, as `switchboard update` checks one, then put in place on the host.
+/// Gives what it said of its version.
 fn install_release(ssh: &Ssh, target: &str, version: &str) -> Result<String> {
-    println!(
-        "Downloading Switchboard {version} for {target} on {}…",
-        ssh.host
-    );
-    let base = install::release_base(version);
-    let pid = std::process::id().to_string();
-    let out = ssh.script(&install::download_script(), &[version, target, &base, &pid])?;
-    if out.status.success() {
-        return Ok(String::from_utf8_lossy(&out.stdout).trim().to_string());
-    }
-    if out.status.code() != Some(install::CANT_DOWNLOAD) {
-        bail!("couldn't install it: {}", said(&out.stderr));
-    }
-    println!(
-        "{} can't download it; downloading it here and copying it over…",
-        ssh.host
-    );
-    let current = release::Version::current();
-    let name = release::archive_name(&current, target);
-    let archive = release::Asset {
-        name: name.clone(),
-        url: format!("{base}/{name}"),
-    };
-    let checksum = release::Asset {
-        name: format!("{name}.sha256"),
-        url: format!("{base}/{name}.sha256"),
-    };
-    let (bytes, sum) = crate::util::block_on(async {
-        let bytes = release::download(&archive, "switchboard ssh").await?;
-        let sum = release::download(&checksum, "switchboard ssh").await?;
-        anyhow::Ok((bytes, sum))
+    println!("Getting Switchboard {version}'s release for {target}…");
+    let tag = format!("v{version}");
+    let chosen = crate::util::block_on(release::tagged(&tag, "switchboard ssh")).map_err(|e| {
+        let missing = e
+            .downcast_ref::<crate::net::ServiceError>()
+            .is_some_and(|e| e.kind == crate::net::ErrorKind::NotFound);
+        if missing {
+            anyhow!(
+                "Switchboard {version} has no release, so a host of another system can't get it from one; build this version there from source and put it in ~/.local/bin, where switchboard ssh finds it"
+            )
+        } else {
+            e
+        }
     })?;
-    update::install::verify(&bytes, &String::from_utf8_lossy(&sum), &name)?;
-    let binary = update::install::binary_from(&bytes)?;
+    let binary = update::release_binary(&chosen, target, "switchboard ssh")?;
+    println!("Copying it to {}…", ssh.host);
     copy_over(ssh, &binary, version, "any")
 }
 

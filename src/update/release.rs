@@ -309,26 +309,7 @@ async fn list_page(page: usize, source: &str) -> Result<(Vec<Release>, usize)> {
     let path = format!("repos/{REPO}/releases?per_page={PER_PAGE}&page={page}");
     let response = github::get_public(&path, source).await?;
     if !response.ok() {
-        let said = response.body["message"].as_str().unwrap_or("").to_string();
-        let kind = match response.status {
-            401 => ErrorKind::Unauthorized,
-            403 | 429 => ErrorKind::RateLimited {
-                reset_at: response
-                    .header("x-ratelimit-reset")
-                    .and_then(|r| r.parse().ok()),
-            },
-            404 => ErrorKind::NotFound,
-            _ => ErrorKind::Failed,
-        };
-        let message = if said.is_empty() {
-            format!("GitHub answered {} for {REPO}'s releases", response.status)
-        } else {
-            format!(
-                "GitHub answered {} for {REPO}'s releases: {said}",
-                response.status
-            )
-        };
-        return Err(ServiceError::new(kind, "GitHub", message).into());
+        return Err(refused(&response, &format!("{REPO}'s releases")));
     }
     let listed = response
         .body
@@ -338,6 +319,43 @@ async fn list_page(page: usize, source: &str) -> Result<(Vec<Release>, usize)> {
         listed.iter().filter_map(Release::from_json).collect(),
         listed.len(),
     ))
+}
+
+/// The release tagged `tag` (`v0.9.1`), however far back it is in the list:
+/// the one `switchboard ssh` puts on a host of another system, this build's
+/// own version (src/cmd/ssh.rs). An error when there is none, or it isn't a
+/// published release of Switchboard.
+pub async fn tagged(tag: &str, source: &str) -> Result<Release> {
+    let path = format!("repos/{REPO}/releases/tags/{tag}");
+    let response = github::get_public(&path, source).await?;
+    if !response.ok() {
+        return Err(refused(&response, &format!("{REPO}'s release {tag}")));
+    }
+    Release::from_json(&response.body)
+        .filter(|r| r.tag == tag)
+        .ok_or_else(|| anyhow!("{tag} isn't a published release of Switchboard"))
+}
+
+/// What GitHub's answer other than a success says, as an error of the kind
+/// it is: `what` is what was asked for.
+fn refused(response: &net::Response, what: &str) -> anyhow::Error {
+    let said = response.body["message"].as_str().unwrap_or("").to_string();
+    let kind = match response.status {
+        401 => ErrorKind::Unauthorized,
+        403 | 429 => ErrorKind::RateLimited {
+            reset_at: response
+                .header("x-ratelimit-reset")
+                .and_then(|r| r.parse().ok()),
+        },
+        404 => ErrorKind::NotFound,
+        _ => ErrorKind::Failed,
+    };
+    let message = if said.is_empty() {
+        format!("GitHub answered {} for {what}", response.status)
+    } else {
+        format!("GitHub answered {} for {what}: {said}", response.status)
+    };
+    ServiceError::new(kind, "GitHub", message).into()
 }
 
 /// How long a release's file may take to arrive.
