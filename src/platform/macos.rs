@@ -97,22 +97,31 @@ pub fn paste() -> Option<String> {
 }
 
 pub fn notify(title: &str, text: &str) {
-    // The text and title as arguments, so neither is read as AppleScript.
     let _ = Command::new("osascript")
-        .args([
-            "-e",
-            "on run argv",
-            "-e",
-            "display notification (item 1 of argv) with title (item 2 of argv)",
-            "-e",
-            "end run",
-            text,
-            title,
-        ])
+        .args(notify_args(title, text))
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .status();
+}
+
+/// osascript's arguments for a notification: the text and title as the
+/// script's arguments, so neither is read as AppleScript, after `--`, so
+/// neither is read as one of osascript's options either: a text starting
+/// `-e` would otherwise be one more line of the script, and a notification
+/// can come from another computer (src/remote/desktop.rs).
+fn notify_args<'a>(title: &'a str, text: &'a str) -> [&'a str; 9] {
+    [
+        "-e",
+        "on run argv",
+        "-e",
+        "display notification (item 1 of argv) with title (item 2 of argv)",
+        "-e",
+        "end run",
+        "--",
+        text,
+        title,
+    ]
 }
 
 // macOS keeps the time since the last keyboard or mouse input (HIDIdleTime, in
@@ -435,6 +444,15 @@ pub fn set_option_as_alt(app: super::TerminalApp) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_notification_s_words_are_never_read_as_osascript_s_options() {
+        let text = "-eproperty p : (do shell script \"touch /tmp/x\")";
+        let args = notify_args("-e", text);
+        let end = args.iter().position(|a| *a == "--").unwrap();
+        assert_eq!(&args[end + 1..], [text, "-e"]);
+        assert!(args[..end].iter().all(|a| *a != text));
+    }
 
     #[test]
     fn the_keychain_line_quotes_what_security_would_split() {
